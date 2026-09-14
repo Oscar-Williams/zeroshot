@@ -26,7 +26,7 @@ use crate::native_v2_contract::{
 };
 
 const LIVE_OUTPUT_CAPACITY: usize = 256;
-const MAX_LIVE_OUTPUT_BYTES: usize = 16 * 1024;
+pub(crate) const MAX_LIVE_OUTPUT_BYTES: usize = 16 * 1024;
 pub(crate) const DURABLE_OUTPUT_CAPACITY: usize = 1024;
 
 mod handle;
@@ -49,7 +49,7 @@ pub use plan::NodeRole;
 use plan::NodeRolePlan;
 mod workspace;
 pub use workspace::{EnvironmentResolutionError, ResolvedEnvironment, WorkspaceAccess, WorkspaceGate};
-pub(crate) use workspace::{EnvironmentRefreshUnavailable, RuntimeEnvironmentRefresh};
+pub(crate) use workspace::{EnvironmentRefreshError, RuntimeEnvironmentRefresh};
 
 pub(crate) fn with_environment_refresh(
     environment: ResolvedEnvironment,
@@ -60,7 +60,7 @@ pub(crate) fn with_environment_refresh(
 
 pub(crate) async fn refresh_environment(
     environment: &ResolvedEnvironment,
-) -> Result<ResolvedEnvironment, EnvironmentRefreshUnavailable> {
+) -> Result<ResolvedEnvironment, EnvironmentRefreshError> {
     workspace::refreshed(environment).await
 }
 
@@ -231,6 +231,10 @@ pub trait NodeDriver: Send + Sync {
 
 #[async_trait]
 pub trait NodeRunner: Send + Sync {
+    /// Reserves execution and returns ownership before asynchronous provider startup.
+    /// This future must be cancellation-safe: dropping it before a handle is returned
+    /// leaves no running work behind. Once returned, cancel and drain the handle to
+    /// retain cleanup and durable metadata, including failures during startup.
     async fn start(&self, request: NodeRunRequest) -> Result<NodeHandle, NodeRunnerError>;
     async fn close_run(&self, run_id: &RunId);
 }

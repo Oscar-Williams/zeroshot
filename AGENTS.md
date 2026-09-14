@@ -76,8 +76,10 @@ with `npm i -g @the-open-engine-company/zeroshot` or build `zeroshot` with Cargo
   connection; control requests and ordinary observers keep their independent connections.
 - Safe-log timestamps are captured at the producer boundary as positive JavaScript-safe Unix epoch
   milliseconds and remain unchanged across durable replay.
-- Run close reserves and tombstones execution activity atomically. No late start, handle, or stream
-  may surface after close returns.
+- Runner start reserves an execution and returns its handle before asynchronous provider startup.
+  Pending start waits are cancellable; accepted startup failures settle through the owned handle.
+  Cancellation drains output and provider cleanup before execution settlement. Run close reserves
+  and tombstones execution activity atomically; no late work may surface after close returns.
 - Node deadlines are optional: omitted `timeoutMs` means completion or explicit cancellation.
   Built-in graphs have no node deadlines, and provider adapters impose no separate turn timeout.
   The supervisor records node error codes and elapsed time in durable logs before settlement.
@@ -96,13 +98,23 @@ with `npm i -g @the-open-engine-company/zeroshot` or build `zeroshot` with Cargo
   graph node; terminal Git details remain redacted and private operator diagnostics.
 - Contained provider sessions bound post-exit I/O draining by any explicit command deadline and a ten-minute
   ceiling while still observing cancellation and cleanup.
-- Git delivery captures bounded, credential-redacted command/status/stdout/stderr diagnostics and
-  routes unfamiliar failures to the existing delivery repair worker through `repair_required`.
-  Graphs opt in with that signal; stored older contracts still validate without it. Repair may run
-  before a PR exists, so only successful receipts require complete remote identity. Cancellation,
-  exhausted graph budgets, confirmed authentication refusal, and authority mismatches remain terminal.
-  Pending authorized head adoption survives repair and completes before staging or pushing resumes.
-  Delivery stages with `git add --all`; writing agents keep tooling outside the checkout.
+- Git delivery owns authenticated repository operations and observes the run PR and branch before
+  staging. It pushes the captured candidate SHA, preserves published ancestry and local work, and
+  recognizes confirmed remote success after a lost response. Authorized branch updates may advance
+  the unchanged candidate directly; other integrated remote changes return `repair_required` so the
+  authored graph decides what work follows. Agents receive local refs and conflicts without the
+  delivery credential. Closed PRs, identity changes and lost published ancestry stop delivery.
+- Delivery retries recognized transport failures within the caller's polling and cancellation
+  policy, refreshing dynamic credentials once after authentication failure. Temporary credential
+  resolution retries with backoff; confirmed refusal and malformed responses stop. Initial
+  resolution belongs to each supervised execution, so it observes the authored deadline and does
+  not block parallel dispatch. Pending authorized head adoption survives repair.
+- Git diagnostics retain bounded, credential-redacted command/status/stdout/stderr details;
+  unfamiliar failures use the existing optional `repair_required` signal. Only successful receipts
+  require complete remote identity. Live output splits large UTF-8 diagnostics into bounded records.
+  Delivery checks unresolved index entries before `git add --all` and completes resolved merges even
+  when their tree has no staged difference. Other unfinished Git operations return raw status for
+  repair before staging or reconciliation. Delivery does not inspect or filter user-installed tooling.
 - GitHub delivery treats aggregate merge policy and required contexts as authority, waits through
   merge queues/deferrals, and succeeds only after observing the exact merged result. Outside merge
   queues, branch freshness advances only through an authorized compare-and-swap response. A
