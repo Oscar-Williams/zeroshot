@@ -5,6 +5,9 @@ pub(super) async fn drain_terminalizing_tasks(
 ) -> Result<(), NativeV2SupervisorError> {
     while let Some(finished) = tasks.join_next().await {
         let finished = finished.map_err(supervisor_task_error)?;
+        if finished.result.cleanup_unconfirmed() {
+            return Err(NativeV2SupervisorError::CleanupUnconfirmed);
+        }
         match finished.result {
             DispatchResult::DurableEventFailure(error) => return Err(error.into()),
             DispatchResult::StartFailure(error) => return Err(error),
@@ -96,6 +99,15 @@ pub(super) enum DispatchResult {
     StartFailure(NativeV2SupervisorError),
 }
 
+impl DispatchResult {
+    pub(super) fn cleanup_unconfirmed(&self) -> bool {
+        matches!(
+            self,
+            Self::Completed(Err(NodeRunnerError::CleanupUnconfirmed))
+        )
+    }
+}
+
 pub(super) struct FinishedDispatch {
     pub(super) execution: ExecutionId,
     pub(super) reference: ExecutionRef,
@@ -179,6 +191,9 @@ async fn observe_dispatch(
         Some(result) => result,
         None => events.await,
     };
+    if result.cleanup_unconfirmed() {
+        return result;
+    }
     match output_result {
         Ok(()) => interrupted.unwrap_or(result),
         Err(error) => DispatchResult::DurableEventFailure(error),
@@ -387,6 +402,7 @@ pub(super) fn runner_failure(error: NodeRunnerError) -> WorkerOutcome {
         | NodeRunnerError::Driver
         | NodeRunnerError::DriverDetail(_)
         | NodeRunnerError::ConnectionLost
+        | NodeRunnerError::CleanupUnconfirmed
         | NodeRunnerError::UnsafeOutput
         | NodeRunnerError::DurableOutputClosed
         | NodeRunnerError::CompletionClosed
