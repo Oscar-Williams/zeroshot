@@ -560,6 +560,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#concurrent-workspace-changes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Concurrent workspace changes
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#state-reduction-chooses-the-next-step" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1528,6 +1539,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#concurrent-workspace-changes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Concurrent workspace changes
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#state-reduction-chooses-the-next-step" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1655,6 +1677,15 @@ runtime bindings, and the initial input; <code>--validate-only</code> runs them 
 <p>Selectors, guards, and bindings are structured data. They are not snippets of JavaScript, JSONPath,
 shell code, or prompt text. Full field rules live in the
 <a href="../../reference/cluster/graph/">graph contract</a>.</p>
+<h2 id="concurrent-workspace-changes">Concurrent workspace changes<a class="headerlink" href="#concurrent-workspace-changes" title="Permanent link">&para;</a></h2>
+<p><code>par</code> branches and <code>map</code> items can run multiple writing agents at once. Writers share the run's
+workspace, so the graph and agent instructions must coordinate edits to the same files. Hosted
+verifiers work in disposable copies; copying while a writer is active does not provide an atomic
+snapshot. Place verification after the writers when it needs their completed changes.</p>
+<p>Sequence Git delivery after the writing branches or map have joined. Graph validation rejects
+parallel delivery and writing, including delivery in a map that can have multiple items. Delivery
+can run alongside read-only verifiers. A delivery receipt can certify run success only when every
+other writer settled before that delivery execution started.</p>
 <h2 id="state-reduction-chooses-the-next-step">State reduction chooses the next step<a class="headerlink" href="#state-reduction-chooses-the-next-step" title="Permanent link">&para;</a></h2>
 <p>An agent returns a value through a declared output channel. Zeroshot checks that value, applies
 authored bindings, and records the new state before it evaluates another node. Model output cannot
