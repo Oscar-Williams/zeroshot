@@ -1658,7 +1658,9 @@ revisions do not rebuild product docs.</p>
 released-docs redirect; it never changes the site's Current default.</p>
 <p>The publisher consolidates existing patch snapshots before publishing, retaining the newest patch
 per minor and replacing old pages with redirects. It stages the complete result before pushing
-<code>gh-pages</code> and deploying through GitHub Pages Actions. No release tags or binary artifacts change.</p>
+<code>gh-pages</code> and deploying through GitHub Pages Actions. No release tags or binary artifacts change.
+If a release is the first publication, the publisher first builds Current from <code>main</code> in an isolated
+checkout, then publishes the requested minor from its release source. Both become visible together.</p>
 
 
 
