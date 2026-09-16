@@ -436,6 +436,17 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#github-copilot" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        GitHub Copilot
+      
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -1494,6 +1505,17 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#github-copilot" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        GitHub Copilot
+      
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -1527,7 +1549,8 @@ installer dependency; the command itself is a Rust executable.</p>
 <p>Run Zeroshot from a Git worktree, and install the agent harness named by the runtime plan:</p>
 <ul>
 <li>install and sign in to Codex for <code>"harness": "codex"</code>;</li>
-<li>install and sign in to Claude Code for <code>"harness": "claude"</code>.</li>
+<li>install and sign in to Claude Code for <code>"harness": "claude"</code>;</li>
+<li>install GitHub Copilot CLI 1.0.85 for <code>"harness": "copilot"</code> with <code>"provider": "github"</code>.</li>
 </ul>
 <p>Provider credentials can come from the current environment or the private Zeroshot connection
 store. The command below prompts without echo and keeps the value out of runtime JSON:</p>
@@ -1546,6 +1569,20 @@ wheel:</p>
 <p>For a long-running target, use <code>ghcr.io/the-open-engine/zeroshot-target</code>. See the
 <a href="../../concepts/targets/">targets guide</a> for a Docker setup bound to loopback.</p>
 <p><a href="../first-run/">Validate and run a first task</a> after installation.</p>
+<h2 id="github-copilot">GitHub Copilot<a class="headerlink" href="#github-copilot" title="Permanent link">&para;</a></h2>
+<p>Copilot uses your GitHub user identity and Copilot entitlement. Store a user OAuth token or
+fine-grained personal token with Copilot Requests permission in the <code>github</code> connection's
+<code>COPILOT_GITHUB_TOKEN</code> field. A GitHub App installation token is not the user-backed route.
+The token stays in private RPC and is excluded from agent tool environments.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="p">{</span><span class="nt">"harness"</span><span class="p">:</span><span class="s2">"copilot"</span><span class="p">,</span><span class="nt">"provider"</span><span class="p">:</span><span class="s2">"github"</span><span class="p">,</span><span class="nt">"model"</span><span class="p">:</span><span class="s2">"auto"</span><span class="p">}</span>
+</code></pre></div>
+<p>Model IDs pass unchanged to Copilot. Zeroshot uses headless RPC schema output and validates each
+response locally, allowing at most two correction turns in the same session. Install the pinned
+CLI version above; the target image already includes it.</p>
+<p>Hosted connection resolvers may additionally declare <code>COPILOT_GITHUB_TOKEN_EXPIRES_AT</code> (Unix
+seconds). Copilot then requests credentials through the resolver throughout a long execution.
+The resolver must return a refreshed token with more than one hour remaining. Static tokens
+without expiry metadata are supplied once when each provider process starts.</p>
 
 
 
