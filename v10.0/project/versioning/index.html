@@ -1392,10 +1392,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#snapshot-manifest" class="md-nav__link">
+  <a href="#build-manifest" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Snapshot manifest
+        Build manifest
       
     </span>
   </a>
@@ -1414,10 +1414,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#release-and-recovery-rules" class="md-nav__link">
+  <a href="#publication-and-recovery" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Release and recovery rules
+        Publication and recovery
       
     </span>
   </a>
@@ -1506,10 +1506,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#snapshot-manifest" class="md-nav__link">
+  <a href="#build-manifest" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Snapshot manifest
+        Build manifest
       
     </span>
   </a>
@@ -1528,10 +1528,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#release-and-recovery-rules" class="md-nav__link">
+  <a href="#publication-and-recovery" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Release and recovery rules
+        Publication and recovery
       
     </span>
   </a>
@@ -1559,115 +1559,106 @@
 
 
 <h1 id="documentation-versions">Documentation versions<a class="headerlink" href="#documentation-versions" title="Permanent link">&para;</a></h1>
-<p>For every release published through this workflow, the documentation site writes an immutable
-snapshot whose pages do not change later.</p>
+<p><strong>Current</strong> follows <code>main</code> and is the default. It may describe changes that have not shipped yet.
+For an installed release, choose its minor version from the header. Each minor version documents
+its newest published patch: releases <code>10.2.0</code> through <code>10.2.8</code> share <code>v10.2/</code>, whose content comes
+from <code>10.2.8</code> after that release publishes.</p>
+<p>Patch releases update the existing minor documentation without adding another selector entry.
+Older minor versions remain available.</p>
 <h2 id="url-contract">URL contract<a class="headerlink" href="#url-contract" title="Permanent link">&para;</a></h2>
-<p>The initial docs base URL is <code>https://the-open-engine.github.io/zeroshot/</code>. Every path in this table
-is relative to that base. Keep its <code>/zeroshot/</code> project prefix while using GitHub Pages; with another
-docs base, resolve the same relative paths against that base instead.</p>
+<p>The docs base is <code>https://the-open-engine.github.io/zeroshot/</code>. Resolve these paths against that
+base, including its <code>/zeroshot/</code> project prefix:</p>
 <table>
 <thead>
 <tr>
 <th>Relative path</th>
 <th>Meaning</th>
-<th>Mutable?</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td><code>vX.Y.Z/</code></td>
-<td>Exact canonical product release</td>
-<td>No</td>
+<td><code>current/</code></td>
+<td>Current <code>main</code> documentation; the site root redirects here</td>
 </tr>
 <tr>
-<td><code>stable/</code></td>
-<td>Redirect to the newest canonical release</td>
-<td>Yes</td>
-</tr>
-<tr>
-<td><code>dev/</code></td>
-<td>Current <code>main</code> documentation</td>
-<td>Yes</td>
+<td><code>vX.Y/</code></td>
+<td>Newest published patch within that minor version</td>
 </tr>
 <tr>
 <td><code>versions.json</code></td>
-<td>Version selector data written by Mike</td>
-<td>Yes</td>
+<td>Selector entries: Current and minor versions</td>
 </tr>
 <tr>
-<td><code>vX.Y.Z/manifest.json</code></td>
-<td>Machine-readable identity and logical routes</td>
-<td>No</td>
+<td><code>current/manifest.json</code>, <code>vX.Y/manifest.json</code></td>
+<td>Source identity and logical routes</td>
+</tr>
+<tr>
+<td><code>dev/</code></td>
+<td>Legacy page redirects to Current</td>
+</tr>
+<tr>
+<td><code>stable/</code></td>
+<td>Legacy page redirects to the newest released minor</td>
+</tr>
+<tr>
+<td><code>vX.Y.Z/</code></td>
+<td>Previously published patch pages redirect to their minor version</td>
 </tr>
 </tbody>
 </table>
-<p>The site root redirects to <code>stable</code> after the first release deployment. Before that, it points to
-<code>dev</code>.</p>
-<h2 id="snapshot-manifest">Snapshot manifest<a class="headerlink" href="#snapshot-manifest" title="Permanent link">&para;</a></h2>
-<p>The build hook writes this manifest beside the pages:</p>
+<p>The selector does not list legacy aliases. Existing patch links retain their page, query string,
+and fragment, but now show the minor version's newest patch. New releases do not create patch paths.</p>
+<h2 id="build-manifest">Build manifest<a class="headerlink" href="#build-manifest" title="Permanent link">&para;</a></h2>
+<p>Manifest schema 2 distinguishes a docs channel from the exact product used to generate its APIs:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="p">{</span>
-<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w">  </span><span class="nt">"docsVersion"</span><span class="p">:</span><span class="w"> </span><span class="s2">"v9.1.0"</span><span class="p">,</span>
-<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="w">  </span><span class="nt">"productVersion"</span><span class="p">:</span><span class="w"> </span><span class="s2">"9.1.0"</span><span class="p">,</span>
-<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="w">  </span><span class="nt">"pythonSdkVersion"</span><span class="p">:</span><span class="w"> </span><span class="s2">"9.1.0.post1"</span><span class="p">,</span>
-<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="w">  </span><span class="nt">"routes"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="w">    </span><span class="nt">"clusterApi"</span><span class="p">:</span><span class="w"> </span><span class="s2">"reference/cluster/api/"</span><span class="p">,</span>
-<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="w">    </span><span class="nt">"cli"</span><span class="p">:</span><span class="w"> </span><span class="s2">"zeroshot-cli/"</span><span class="p">,</span>
-<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="w">    </span><span class="nt">"execution"</span><span class="p">:</span><span class="w"> </span><span class="s2">"concepts/execution/"</span><span class="p">,</span>
-<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a><span class="w">    </span><span class="nt">"graphSpec"</span><span class="p">:</span><span class="w"> </span><span class="s2">"reference/cluster/graph/"</span><span class="p">,</span>
-<a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a><span class="w">    </span><span class="nt">"install"</span><span class="p">:</span><span class="w"> </span><span class="s2">"getting-started/install/"</span><span class="p">,</span>
-<a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a><span class="w">    </span><span class="nt">"openrpc"</span><span class="p">:</span><span class="w"> </span><span class="s2">"reference/cluster/openrpc.json"</span><span class="p">,</span>
-<a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a><span class="w">    </span><span class="nt">"overview"</span><span class="p">:</span><span class="w"> </span><span class="s2">""</span><span class="p">,</span>
-<a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a><span class="w">    </span><span class="nt">"portableBindings"</span><span class="p">:</span><span class="w"> </span><span class="s2">"reference/cluster/portable-bindings/"</span><span class="p">,</span>
-<a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a><span class="w">    </span><span class="nt">"pythonApi"</span><span class="p">:</span><span class="w"> </span><span class="s2">"reference/python/"</span><span class="p">,</span>
-<a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a><span class="w">    </span><span class="nt">"pythonSdk"</span><span class="p">:</span><span class="w"> </span><span class="s2">"guides/python-sdk/"</span><span class="p">,</span>
-<a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a><span class="w">    </span><span class="nt">"quickstart"</span><span class="p">:</span><span class="w"> </span><span class="s2">"getting-started/first-run/"</span><span class="p">,</span>
-<a id="__codelineno-0-17" name="__codelineno-0-17" href="#__codelineno-0-17"></a><span class="w">    </span><span class="nt">"runControl"</span><span class="p">:</span><span class="w"> </span><span class="s2">"guides/observe-and-control/"</span><span class="p">,</span>
-<a id="__codelineno-0-18" name="__codelineno-0-18" href="#__codelineno-0-18"></a><span class="w">    </span><span class="nt">"runtimePlan"</span><span class="p">:</span><span class="w"> </span><span class="s2">"concepts/runtimes-and-connections/"</span><span class="p">,</span>
-<a id="__codelineno-0-19" name="__codelineno-0-19" href="#__codelineno-0-19"></a><span class="w">    </span><span class="nt">"schema"</span><span class="p">:</span><span class="w"> </span><span class="s2">"reference/cluster/schema.json"</span><span class="p">,</span>
-<a id="__codelineno-0-20" name="__codelineno-0-20" href="#__codelineno-0-20"></a><span class="w">    </span><span class="nt">"targets"</span><span class="p">:</span><span class="w"> </span><span class="s2">"concepts/targets/"</span>
-<a id="__codelineno-0-21" name="__codelineno-0-21" href="#__codelineno-0-21"></a><span class="w">  </span><span class="p">},</span>
-<a id="__codelineno-0-22" name="__codelineno-0-22" href="#__codelineno-0-22"></a><span class="w">  </span><span class="nt">"schemaVersion"</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span>
-<a id="__codelineno-0-23" name="__codelineno-0-23" href="#__codelineno-0-23"></a><span class="w">  </span><span class="nt">"sourceCommit"</span><span class="p">:</span><span class="w"> </span><span class="s2">"FULL_GIT_COMMIT"</span>
-<a id="__codelineno-0-24" name="__codelineno-0-24" href="#__codelineno-0-24"></a><span class="p">}</span>
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w">  </span><span class="nt">"schemaVersion"</span><span class="p">:</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span>
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="w">  </span><span class="nt">"docsVersion"</span><span class="p">:</span><span class="w"> </span><span class="s2">"v10.2"</span><span class="p">,</span>
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="w">  </span><span class="nt">"productVersion"</span><span class="p">:</span><span class="w"> </span><span class="s2">"10.2.8"</span><span class="p">,</span>
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="w">  </span><span class="nt">"pythonSdkVersion"</span><span class="p">:</span><span class="w"> </span><span class="s2">"10.2.8.post1"</span><span class="p">,</span>
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="w">  </span><span class="nt">"sourceCommit"</span><span class="p">:</span><span class="w"> </span><span class="s2">"FULL_PRODUCT_SOURCE_COMMIT"</span><span class="p">,</span>
+<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="w">  </span><span class="nt">"publisherCommit"</span><span class="p">:</span><span class="w"> </span><span class="s2">"FULL_PUBLICATION_WORKFLOW_COMMIT"</span><span class="p">,</span>
+<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="w">  </span><span class="nt">"routes"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a><span class="w">    </span><span class="nt">"overview"</span><span class="p">:</span><span class="w"> </span><span class="s2">""</span><span class="p">,</span>
+<a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a><span class="w">    </span><span class="nt">"runtimePlan"</span><span class="p">:</span><span class="w"> </span><span class="s2">"concepts/runtimes-and-connections/"</span><span class="p">,</span>
+<a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a><span class="w">    </span><span class="nt">"runControl"</span><span class="p">:</span><span class="w"> </span><span class="s2">"guides/observe-and-control/"</span><span class="p">,</span>
+<a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a><span class="w">    </span><span class="nt">"cli"</span><span class="p">:</span><span class="w"> </span><span class="s2">"zeroshot-cli/"</span><span class="p">,</span>
+<a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a><span class="w">    </span><span class="nt">"pythonApi"</span><span class="p">:</span><span class="w"> </span><span class="s2">"reference/python/"</span><span class="p">,</span>
+<a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a><span class="w">    </span><span class="nt">"clusterApi"</span><span class="p">:</span><span class="w"> </span><span class="s2">"reference/cluster/api/"</span>
+<a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a><span class="w">  </span><span class="p">}</span>
+<a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a><span class="p">}</span>
 </code></pre></div>
-<p>Route values are relative to the version root. Consumers should reject an unknown
-<code>schemaVersion</code>, check <code>productVersion</code>, and then join the selected route to the exact version base.</p>
+<p>The example abbreviates <code>routes</code>; builds retain the complete logical route map, including protocol
+schemas. Values are relative to the selected version root. Current uses <code>docsVersion: current</code>
+and null product and Python SDK versions; its source commit identifies <code>main</code> at build time.</p>
+<p>Publication tools and this version-policy page can come from a newer workflow commit than the
+product source. <code>publisherCommit</code> records that distinction. Minor pages migrated from the old site
+retain their original source identity and omit <code>publisherCommit</code> until rebuilt; their existing
+rendered product content is reused.</p>
+<p>Old patch manifests now contain a schema-2 redirect record such as
+<code>{"schemaVersion": 2, "redirect": "../v10.2/manifest.json"}</code>. This is JSON metadata, not an HTTP
+redirect: GitHub Pages cannot redirect JSON clients with its HTML redirect pages. Clients that need
+an exact historical patch manifest must use the site's Git history. Do not treat a minor manifest
+as proof that the docs match an older patch exactly.</p>
 <h2 id="linking-from-zeroshot-cloud">Linking from Zeroshot Cloud<a class="headerlink" href="#linking-from-zeroshot-cloud" title="Permanent link">&para;</a></h2>
-<p>The Cloud deployment already knows the Zeroshot image version and source commit, which is enough to
-link to matching core documentation without copying it. Use this sequence:</p>
-<ol>
-<li>read the deployed image's <code>X.Y.Z</code> version;</li>
-<li>resolve <code>vX.Y.Z/manifest.json</code> against the docs base and fetch it once during deployment or
-   startup;</li>
-<li>confirm <code>productVersion</code> and, when available, <code>sourceCommit</code>;</li>
-<li>resolve a logical route from the manifest against that same exact-version base.</li>
-</ol>
-<p>For example, version <code>9.1.0</code> uses
-<code>https://the-open-engine.github.io/zeroshot/v9.1.0/manifest.json</code>. Joining
-<code>routes.runtimePlan</code> produces
-<code>https://the-open-engine.github.io/zeroshot/v9.1.0/concepts/runtimes-and-connections/</code>.</p>
-<p>A Cloud runtime-plan page can select <code>routes.runtimePlan</code>, while a run page can select
-<code>routes.runControl</code>. The Cloud site owns instructions for OAuth, GitHub Apps, accounts, organization
-policy, and capacity; graph, runtime, CLI, protocol, and SDK material stays here.</p>
-<p>Link to these pages instead of importing HTML or placing the site in an iframe. Each snapshot has its
-own search index, navigation, canonical URL, and generated anchors, while Cloud avoids serving a copy
-of the build output.</p>
-<h2 id="release-and-recovery-rules">Release and recovery rules<a class="headerlink" href="#release-and-recovery-rules" title="Permanent link">&para;</a></h2>
-<p><code>main</code> publishes <code>dev</code>. After Python SDK revision 1, the product release workflow calls the docs
-publisher with the same tag and source commit. The publisher refuses to replace a version path when
-its manifest names another commit; rerunning the same source can repair <code>stable</code> without rebuilding
-the snapshot.</p>
-<p>Later Python-only revisions can use a separate <code>python/X.Y.Z.postN/</code> namespace when that need first
-arises. They must not rebuild <code>vX.Y.Z/</code> from a newer commit.</p>
-<p>Canonical tags created before this publisher lands do not contain the site source and cannot be
-backfilled without misrepresenting their provenance. Cloud should test for the exact manifest and
-either hide the core-doc link or label a <code>dev/</code> fallback as development documentation. Exact-version
-links begin with the first later canonical release.</p>
-<p>GitHub Pages hosts the site at <code>https://the-open-engine.github.io/zeroshot/</code> with <strong>GitHub Actions</strong>
-as its publishing source. If a publication needs to be retried, manually run <strong>Publish versioned
-documentation</strong>. Mike keeps the version tree on <code>gh-pages</code>, and the publisher uploads that tree
-through the official Pages actions; repository owners can add a custom domain later without changing
-version or manifest paths.</p>
+<p>For a deployed product version <code>X.Y.Z</code>, fetch <code>vX.Y/manifest.json</code> and require schema 2. Confirm that
+<code>productVersion</code> belongs to the deployed major/minor line, then resolve a logical route against
+<code>vX.Y/</code>. For example, <code>10.2.3</code> uses the <code>v10.2</code> docs, whose manifest may identify <code>10.2.8</code>.
+Callers should label this as minor-version documentation and account for features added after their
+installed patch. Compare source commits only when the documented and deployed product versions match.</p>
+<p>If the minor has no docs, offer an explicitly labelled Current link. Current may contain unreleased
+behavior. Cloud owns instructions for accounts, organization policy, OAuth, GitHub Apps, and capacity;
+core graph, runtime, CLI, protocol, and SDK material stays here.</p>
+<h2 id="publication-and-recovery">Publication and recovery<a class="headerlink" href="#publication-and-recovery" title="Permanent link">&para;</a></h2>
+<p>Every <code>main</code> publication updates Current. After Python SDK revision 1, a product release updates its
+minor documentation from the exact release tag and commit. A retry cannot replace a newer patch with
+an older one or substitute a different source for the same product version. Later Python-only
+revisions do not rebuild product docs.</p>
+<p>To retry, run <strong>Publish versioned documentation</strong>. Omit inputs for Current, or supply the exact
+<code>vX.Y.Z</code> release and source commit for a minor. The optional <code>stable</code> input maintains the legacy
+released-docs redirect; it never changes the site's Current default.</p>
+<p>The publisher consolidates existing patch snapshots before publishing, retaining the newest patch
+per minor and replacing old pages with redirects. It stages the complete result before pushing
+<code>gh-pages</code> and deploying through GitHub Pages Actions. No release tags or binary artifacts change.</p>
 
 
 
