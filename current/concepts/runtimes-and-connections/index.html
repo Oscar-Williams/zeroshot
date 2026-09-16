@@ -598,6 +598,17 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#gateways" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Gateways
+      
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -1516,6 +1527,17 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#gateways" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Gateways
+      
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -1559,11 +1581,11 @@ run the same graph.</p>
 <tbody>
 <tr>
 <td><code>codex</code></td>
-<td><code>openai</code>, <code>openrouter</code>, <code>bedrock</code></td>
+<td><code>openai</code>, <code>openrouter</code>, <code>bedrock</code>, <code>gateway</code></td>
 </tr>
 <tr>
 <td><code>claude</code></td>
-<td><code>anthropic</code>, <code>openrouter</code>, <code>bedrock</code></td>
+<td><code>anthropic</code>, <code>openrouter</code>, <code>bedrock</code>, <code>gateway</code></td>
 </tr>
 </tbody>
 </table>
@@ -1624,6 +1646,11 @@ them out of the graph, runtime JSON, run ledger, and observation records.</p>
 <td><code>ANTHROPIC_API_KEY</code></td>
 </tr>
 <tr>
+<td><code>gateway</code></td>
+<td><code>gateway</code></td>
+<td><code>GATEWAY_BASE_URL</code>, <code>GATEWAY_API_KEY</code></td>
+</tr>
+<tr>
 <td><code>bedrock</code></td>
 <td><code>bedrock</code></td>
 <td><code>AWS_BEARER_TOKEN_BEDROCK</code>, <code>AWS_REGION</code></td>
@@ -1638,6 +1665,22 @@ them out of the graph, runtime JSON, run ledger, and observation records.</p>
 updating a multi-field connection. <code>connection list</code> reports names and kind but never values.</p>
 <p>Hosted targets can also own user- or organization-scoped connections. Setup and dynamic connection
 kinds depend on the target; Zeroshot consumes only the resolved fields declared by the runtime.</p>
+<h2 id="gateways">Gateways<a class="headerlink" href="#gateways" title="Permanent link">&para;</a></h2>
+<p>Use <code>provider: "gateway"</code> with either harness and the gateway's model identifier:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="p">{</span><span class="w"> </span><span class="nt">"harness"</span><span class="p">:</span><span class="w"> </span><span class="s2">"codex"</span><span class="p">,</span><span class="w"> </span><span class="nt">"provider"</span><span class="p">:</span><span class="w"> </span><span class="s2">"gateway"</span><span class="p">,</span><span class="w"> </span><span class="nt">"model"</span><span class="p">:</span><span class="w"> </span><span class="s2">"PROVIDER_MODEL_ID"</span><span class="w"> </span><span class="p">}</span>
+</code></pre></div>
+<p>Store the endpoint and key together through the existing connection command:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="go">zeroshot connection set gateway --field GATEWAY_BASE_URL --field GATEWAY_API_KEY</span>
+</code></pre></div>
+<p>Codex requires the OpenAI <strong>Responses API</strong>, including streaming and tool calls; Chat Completions
+alone is insufficient. It sends the key as a bearer token. Claude requires the Anthropic <strong>Messages
+API</strong> and sends the key in <code>x-api-key</code>. The selected gateway/model must support the harness's
+requests, including structured output. Zeroshot does not probe capabilities or translate protocols.</p>
+<p>Supply the base URL expected by the selected harness, including any gateway path prefix. Zeroshot
+preserves that path. For OpenRouter, use <code>https://openrouter.ai/api/v1</code> with Codex or
+<code>https://openrouter.ai/api</code> with Claude. Base URLs must use HTTP(S) and cannot contain embedded
+credentials, query parameters, or fragments. Both fields remain connection values, outside runtime
+JSON and run history. Exact plans declare these fields under any chosen connection key.</p>
 
 
 
