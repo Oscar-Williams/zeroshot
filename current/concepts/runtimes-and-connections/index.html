@@ -1565,7 +1565,7 @@ run the same graph.</p>
 <h2 id="four-explicit-choices">Four explicit choices<a class="headerlink" href="#four-explicit-choices" title="Permanent link">&para;</a></h2>
 <p>Each agent binding names:</p>
 <ol>
-<li>a <strong>harness</strong>, <code>codex</code> or <code>claude</code>;</li>
+<li>a <strong>harness</strong>, <code>codex</code>, <code>claude</code>, or <code>copilot</code>;</li>
 <li>a <strong>provider</strong> supported by that harness;</li>
 <li>an opaque provider-owned <strong>model</strong> identifier;</li>
 <li>zero or more named <strong>connections</strong>, each declaring exact environment field names.</li>
@@ -1587,9 +1587,13 @@ run the same graph.</p>
 <td><code>claude</code></td>
 <td><code>anthropic</code>, <code>openrouter</code>, <code>bedrock</code>, <code>gateway</code></td>
 </tr>
+<tr>
+<td><code>copilot</code></td>
+<td><code>github</code></td>
+</tr>
 </tbody>
 </table>
-<p>Admission rejects the two known-incompatible pairs, <code>codex</code> with <code>anthropic</code> and <code>claude</code> with
+<p>Admission rejects known-incompatible pairs, such as <code>codex</code> with <code>anthropic</code> and <code>claude</code> with
 <code>openai</code>. Zeroshot does not check current provider availability, and model names remain
 provider-owned.</p>
 <h2 id="uniform-and-exact-plans">Uniform and exact plans<a class="headerlink" href="#uniform-and-exact-plans" title="Permanent link">&para;</a></h2>
@@ -1655,6 +1659,11 @@ them out of the graph, runtime JSON, run ledger, and observation records.</p>
 <td><code>bedrock</code></td>
 <td><code>AWS_BEARER_TOKEN_BEDROCK</code>, <code>AWS_REGION</code></td>
 </tr>
+<tr>
+<td><code>github</code></td>
+<td><code>github</code></td>
+<td><code>COPILOT_GITHUB_TOKEN</code></td>
+</tr>
 </tbody>
 </table>
 <p>Store a local static connection by prompting for its fields:</p>
@@ -1666,7 +1675,7 @@ updating a multi-field connection. <code>connection list</code> reports names an
 <p>Hosted targets can also own user- or organization-scoped connections. Setup and dynamic connection
 kinds depend on the target; Zeroshot consumes only the resolved fields declared by the runtime.</p>
 <h2 id="gateways">Gateways<a class="headerlink" href="#gateways" title="Permanent link">&para;</a></h2>
-<p>Use <code>provider: "gateway"</code> with either harness and the gateway's model identifier:</p>
+<p>Use <code>provider: "gateway"</code> with <code>codex</code> or <code>claude</code> and the gateway's model identifier:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="p">{</span><span class="w"> </span><span class="nt">"harness"</span><span class="p">:</span><span class="w"> </span><span class="s2">"codex"</span><span class="p">,</span><span class="w"> </span><span class="nt">"provider"</span><span class="p">:</span><span class="w"> </span><span class="s2">"gateway"</span><span class="p">,</span><span class="w"> </span><span class="nt">"model"</span><span class="p">:</span><span class="w"> </span><span class="s2">"PROVIDER_MODEL_ID"</span><span class="w"> </span><span class="p">}</span>
 </code></pre></div>
 <p>Store the endpoint and key together through the existing connection command:</p>

@@ -1565,8 +1565,8 @@ run state and resolves connections. The graph protocol stays the same when the t
 <p>Omit <code>--target</code> to work in the current Git worktree. Zeroshot starts a detached controller and keeps
 the run ledger under the local state directory, where later CLI invocations can list, watch, or stop
 the run.</p>
-<p>Local execution is the only mode that mutates the caller's existing worktree; the installed Codex or
-Claude harness runs as the current user.</p>
+<p>Local execution is the only mode that mutates the caller's existing worktree; the selected installed
+harness runs as the current user.</p>
 <p>Local Codex runs with <code>provider: "openai"</code> use the model provider and transport configured in the
 user's Codex configuration, including OpenAI-compatible proxies such as LiteLLM. Zeroshot supplies
 the runtime's model and any explicit reasoning effort, but leaves web search and sandbox network
@@ -1580,17 +1580,17 @@ shell settings. Explicit gateway selections use their <code>GATEWAY_BASE_URL</co
 <code>anthropic</code> runs also inherit Claude's shell provider-selection flags. Explicit <code>openrouter</code>,
 <code>bedrock</code>, and <code>gateway</code> selections retain their provider setup and reject declared transport flags
 that would route to an incompatible provider.</p>
-<p>Local and hosted workers default to Codex's <code>--dangerously-bypass-approvals-and-sandbox</code> or Claude's
-<code>--dangerously-skip-permissions</code> when no permission policy is configured. Before each turn, Zeroshot
-queries the harness's resolved settings without sending a model prompt. Explicit approval, sandbox,
+<p>Local and hosted Codex and Claude workers default to <code>--dangerously-bypass-approvals-and-sandbox</code> or
+<code>--dangerously-skip-permissions</code>, respectively, when no permission policy is configured. Before each
+turn, Zeroshot queries the harness's resolved settings without sending a model prompt. Explicit approval, sandbox,
 permission rules, and managed restrictions take precedence: Zeroshot adds no bypass flag in those
 cases. Claude shell permission controls are inherited locally too. If inspection fails or the CLI
 does not support it, the harness keeps its native permission behavior. Inspection adds one CLI
 startup per turn and is bounded to ten seconds; it does not rewrite settings files, though the CLI
 may update its own startup state.</p>
-<p>Local verifiers operate directly on the candidate and retain Codex's read-only sandbox or Claude's
-plan permission mode. Hosted verifiers receive disposable writable copies and use the same
-permission defaults as workers. The hosted process and filesystem isolation remains in force.</p>
+<p>Local Codex and Claude verifiers operate directly on the candidate and retain Codex's read-only
+sandbox or Claude's plan permission mode. Hosted verifiers receive disposable writable copies and
+use the same permission defaults as workers. The hosted process and filesystem isolation remains in force.</p>
 <p>Zeroshot controls the response format and session continuation. Web search follows Codex's
 configuration: by default it uses live search with full access and cached search otherwise.
 An explicit <code>web_search="cached"</code> also prevents Zeroshot from adding bypass, because Codex can

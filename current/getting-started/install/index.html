@@ -1567,6 +1567,14 @@ archive against <code>SHA256SUMS</code> before writing the native executable.</p
 </code></pre></div>
 <p>Release builds cover Linux x64 and arm64, macOS x64 and arm64, and Windows x64. Node.js is only an
 installer dependency; the command itself is a Rust executable.</p>
+<p>On Windows, the CLI and local in-process runs work natively from PowerShell or Command Prompt.
+Install Git for Windows and put Git and your chosen harness on <code>PATH</code>; npm-installed <code>.cmd</code>
+launchers are supported. Local configuration defaults to <code>%LOCALAPPDATA%\zeroshot</code> and run state
+to <code>%LOCALAPPDATA%\zeroshot\state</code>. <code>ZEROSHOT_CONFIG_DIR</code> and <code>ZEROSHOT_STATE_DIR</code> can override
+these with absolute paths. The hosted target image requires Linux.</p>
+<p>For Codex, complete its <a href="https://developers.openai.com/codex/windows">native Windows sandbox setup</a>
+before running graphs with reviewers. Zeroshot keeps local Codex reviewers read-only; it does not
+install their sandbox.</p>
 <h2 id="open-the-workspace-ui">Open the workspace UI<a class="headerlink" href="#open-the-workspace-ui" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="go">zeroshot ui</span>
 </code></pre></div>
