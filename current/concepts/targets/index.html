@@ -1580,17 +1580,24 @@ shell settings. Explicit gateway selections use their <code>GATEWAY_BASE_URL</co
 <code>anthropic</code> runs also inherit Claude's shell provider-selection flags. Explicit <code>openrouter</code>,
 <code>bedrock</code>, and <code>gateway</code> selections retain their provider setup and reject declared transport flags
 that would route to an incompatible provider.</p>
-<p>Local and hosted Codex and Claude workers default to <code>--dangerously-bypass-approvals-and-sandbox</code> or
-<code>--dangerously-skip-permissions</code>, respectively, when no permission policy is configured. Before each
+<p>Local and hosted Codex and Claude workers and verifiers default to
+<code>--dangerously-bypass-approvals-and-sandbox</code> or <code>--dangerously-skip-permissions</code>, respectively,
+when no permission policy is configured. Before each
 turn, Zeroshot queries the harness's resolved settings without sending a model prompt. Explicit approval, sandbox,
 permission rules, and managed restrictions take precedence: Zeroshot adds no bypass flag in those
 cases. Claude shell permission controls are inherited locally too. If inspection fails or the CLI
 does not support it, the harness keeps its native permission behavior. Inspection adds one CLI
 startup per turn and is bounded to ten seconds; it does not rewrite settings files, though the CLI
 may update its own startup state.</p>
-<p>Local Codex and Claude verifiers operate directly on the candidate and retain Codex's read-only
-sandbox or Claude's plan permission mode. Hosted verifiers receive disposable writable copies and
-use the same permission defaults as workers. The hosted process and filesystem isolation remains in force.</p>
+<p>Every agent verifier node, including those in custom profiles, uses the same permission handling as
+workers. Zeroshot automatically adds instructions to inspect without modifying source, tests,
+configuration, or other material under review or implementing repairs. Verifiers may run checks and
+create temporary files and generated artifacts, and must report failed or unavailable checks accurately.
+The built-in acceptance verifier also tries to run the repository's pre-commit checks and reports
+the results.</p>
+<p>Local verifiers operate directly on the candidate: the restriction on edits is instruction guidance,
+not a filesystem boundary. Hosted verifiers retain disposable writable copies; their process and
+filesystem isolation remains in force.</p>
 <p>Zeroshot controls the response format and session continuation. Web search follows Codex's
 configuration: by default it uses live search with full access and cached search otherwise.
 An explicit <code>web_search="cached"</code> also prevents Zeroshot from adding bypass, because Codex can

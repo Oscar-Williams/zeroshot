@@ -1599,8 +1599,8 @@ launchers are supported. Local configuration defaults to <code>%LOCALAPPDATA%\ze
 to <code>%LOCALAPPDATA%\zeroshot\state</code>. <code>ZEROSHOT_CONFIG_DIR</code> and <code>ZEROSHOT_STATE_DIR</code> can override
 these with absolute paths. The hosted target image requires Linux.</p>
 <p>For Codex, complete its <a href="https://developers.openai.com/codex/windows">native Windows sandbox setup</a>
-before running graphs with reviewers. Zeroshot keeps local Codex reviewers read-only; it does not
-install their sandbox.</p>
+if your Codex permission settings require it. Workers and reviewers use the same permission handling;
+Zeroshot does not install the sandbox.</p>
 <h2 id="connect-zeroshot-cloud">Connect Zeroshot Cloud<a class="headerlink" href="#connect-zeroshot-cloud" title="Permanent link">&para;</a></h2>
 <p>The Cloud target is built in. Sign in once; organization selection happens in the browser:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="go">zeroshot target login cloud</span>
