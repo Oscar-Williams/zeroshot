@@ -1602,8 +1602,8 @@ for custom providers. Zeroshot also supplies <code>CODEX_API_KEY</code> for nati
 that variable isn't already declared. See <a href="../runtimes-and-connections/">Runtimes and connections</a>.</p>
 <h2 id="direct-target">Direct target<a class="headerlink" href="#direct-target" title="Permanent link">&para;</a></h2>
 <p>A direct target exposes Zeroshot's HTTP and OECP contracts without application-level authentication.
-The released container includes Zeroshot plus pinned Codex and Claude harnesses.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="go">docker run --rm --detach --name zeroshot-target \</span>
+The released container includes Zeroshot plus pinned Codex, Claude, and GitHub Copilot harnesses.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="go">docker run --detach --restart unless-stopped --name zeroshot-target \</span>
 <a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="go">  -p 127.0.0.1:8080:8080 \</span>
 <a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="go">  -v zeroshot-data:/var/lib/zeroshot \</span>
 <a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="go">  ghcr.io/the-open-engine/zeroshot-target:latest</span>
@@ -1612,6 +1612,10 @@ The released container includes Zeroshot plus pinned Codex and Claude harnesses.
 <a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="go">  --url http://127.0.0.1:8080 \</span>
 <a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="go">  --direct</span>
 </code></pre></div>
+<p>The target keeps running between runs. Docker restarts it after a reboot or unexpected exit with
+<code>--restart unless-stopped</code>; manually stopping it keeps it stopped until <code>docker start zeroshot-target</code>.
+Docker itself must be running. Target state persists in the named <code>zeroshot-data</code> volume, including
+when you recreate a container that was previously started with <code>--rm</code>.</p>
 <div class="admonition danger">
 <p class="admonition-title">Direct means unauthenticated</p>
 <p>Keep the published port on loopback or a trusted private network. Put an authenticated reverse
