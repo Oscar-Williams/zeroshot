@@ -1589,6 +1589,10 @@
 <td><code>@the-open-engine-company/zeroshot</code></td>
 </tr>
 <tr>
+<td>Agent skill</td>
+<td><code>skills/zeroshot/SKILL.md</code> in the npm package</td>
+</tr>
+<tr>
 <td>Target image</td>
 <td><code>ghcr.io/the-open-engine/zeroshot-target</code></td>
 </tr>
@@ -1608,6 +1612,12 @@
 </table>
 <p>The workflow publishes no alternate tag prefix, package, image, executable alias, source-build
 fallback, or compatibility artifact.</p>
+<p>The npm installer copies the same managed skill to <code>$HOME/.agents/skills/zeroshot</code> for Codex and
+GitHub Copilot, and to <code>${CLAUDE_CONFIG_DIR:-$HOME/.claude}/skills/zeroshot</code> for Claude Code. These
+fixed user scopes are installed unconditionally so agents added later need no Zeroshot reinstall.
+Package updates replace only an unchanged managed copy. An edited or conflicting skill is preserved
+and fails installation visibly. npm 7 and newer provide no uninstall lifecycle, so users remove
+unchanged managed copies from these documented paths when they uninstall the package.</p>
 <h2 id="targets">Targets<a class="headerlink" href="#targets" title="Permanent link">&para;</a></h2>
 <p>The target manifest declares Linux x64/arm64 musl, macOS x64/arm64, and Windows x64, and the npm
 target table must match it exactly. The installer stops on any other host.</p>
