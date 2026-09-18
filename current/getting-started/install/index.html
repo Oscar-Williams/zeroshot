@@ -415,6 +415,17 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
+  <a href="#open-the-workspace-ui" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Open the workspace UI
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#prepare-a-local-run" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1484,6 +1495,17 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
+  <a href="#open-the-workspace-ui" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Open the workspace UI
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#prepare-a-local-run" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1545,6 +1567,28 @@ archive against <code>SHA256SUMS</code> before writing the native executable.</p
 </code></pre></div>
 <p>Release builds cover Linux x64 and arm64, macOS x64 and arm64, and Windows x64. Node.js is only an
 installer dependency; the command itself is a Rust executable.</p>
+<h2 id="open-the-workspace-ui">Open the workspace UI<a class="headerlink" href="#open-the-workspace-ui" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="go">zeroshot ui</span>
+</code></pre></div>
+<p>Open <code>http://127.0.0.1:4173/ui/</code> to edit profiles and inspect live or completed local runs.
+Use <code>--listen 127.0.0.1:4185</code> to choose another loopback port. Ctrl-C stops the UI server;
+active runs continue. Restart the command to reconnect.</p>
+<p><strong>Profiles</strong> edits graphs and runtime settings; the info icon explains authoring defaults.
+Saved profiles share the CLI's configuration store (<code>ZEROSHOT_CONFIG_DIR</code>); run history uses
+<code>ZEROSHOT_STATE_DIR</code>. Start a saved local profile from the CLI:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="go">zeroshot run --title "My task" --profile local:my-profile --input input.json</span>
+</code></pre></div>
+<p>Open <strong>Runs</strong> for <a href="../../guides/observe-and-control/#browser">live monitoring and replay</a>.
+The <a href="../../concepts/targets/#direct-target">Docker target</a> serves its own profiles and runs at <code>/ui/</code>.
+Cloud embedding remains tracked in <a href="https://github.com/the-open-engine/zero-cloud/issues/301">zero-cloud #301</a>.</p>
+<p>Release executables embed the UI. To build it from source:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="go">npm --prefix ui ci --ignore-scripts</span>
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="go">npm --prefix ui run build</span>
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="go">cargo build --release --package zeroshot --features ui</span>
+<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="go">./target/release/zeroshot ui</span>
+</code></pre></div>
+<p>Node.js is needed for this build, not to serve the resulting UI. Library consumers
+can leave the <code>ui</code> feature disabled.</p>
 <h2 id="prepare-a-local-run">Prepare a local run<a class="headerlink" href="#prepare-a-local-run" title="Permanent link">&para;</a></h2>
 <p>Run Zeroshot from a Git worktree, and install the agent harness named by the runtime plan:</p>
 <ul>
@@ -1554,7 +1598,7 @@ installer dependency; the command itself is a Rust executable.</p>
 </ul>
 <p>Provider credentials can come from the current environment or the private Zeroshot connection
 store. The command below prompts without echo and keeps the value out of runtime JSON:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="go">zeroshot connection set openai --field OPENAI_API_KEY</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="go">zeroshot connection set openai --field OPENAI_API_KEY</span>
 </code></pre></div>
 <p>Use <code>openrouter</code>, <code>anthropic</code>, <code>bedrock</code>, or <code>gateway</code> as the connection key when the runtime declares that
 provider. <a href="../../concepts/runtimes-and-connections/">Runtimes and connections</a> lists the default field
@@ -1564,7 +1608,7 @@ names and explains the separation.</p>
 and <code>SHA256SUMS</code>; archive names contain the release version and target triple.</p>
 <p>The Python SDK requires Python 3.11 or newer and ships the matching executable inside each platform
 wheel:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="go">python -m pip install the-open-engine-zeroshot</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="go">python -m pip install the-open-engine-zeroshot</span>
 </code></pre></div>
 <p>For a long-running target, use <code>ghcr.io/the-open-engine/zeroshot-target</code>. See the
 <a href="../../concepts/targets/">targets guide</a> for a Docker setup bound to loopback.</p>
@@ -1574,7 +1618,7 @@ wheel:</p>
 fine-grained personal token with Copilot Requests permission in the <code>github</code> connection's
 <code>COPILOT_GITHUB_TOKEN</code> field. A GitHub App installation token is not the user-backed route.
 The token stays in private RPC and is excluded from agent tool environments.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="p">{</span><span class="nt">"harness"</span><span class="p">:</span><span class="s2">"copilot"</span><span class="p">,</span><span class="nt">"provider"</span><span class="p">:</span><span class="s2">"github"</span><span class="p">,</span><span class="nt">"model"</span><span class="p">:</span><span class="s2">"auto"</span><span class="p">}</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="p">{</span><span class="w"> </span><span class="nt">"harness"</span><span class="p">:</span><span class="w"> </span><span class="s2">"copilot"</span><span class="p">,</span><span class="w"> </span><span class="nt">"provider"</span><span class="p">:</span><span class="w"> </span><span class="s2">"github"</span><span class="p">,</span><span class="w"> </span><span class="nt">"model"</span><span class="p">:</span><span class="w"> </span><span class="s2">"auto"</span><span class="w"> </span><span class="p">}</span>
 </code></pre></div>
 <p>Model IDs pass unchanged to Copilot. Zeroshot uses headless RPC schema output and validates each
 response locally, allowing at most two correction turns in the same session. Install the pinned

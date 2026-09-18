@@ -687,6 +687,17 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
+  <a href="#browser" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Browser
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#foreground-and-detached-submission" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1506,6 +1517,17 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
+  <a href="#browser" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Browser
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#foreground-and-detached-submission" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1583,6 +1605,14 @@
 <h1 id="observe-and-control-runs">Observe and control runs<a class="headerlink" href="#observe-and-control-runs" title="Permanent link">&para;</a></h1>
 <p>Run state persists when an observation client leaves, and reconnecting does not change the run
 lifetime.</p>
+<h2 id="browser">Browser<a class="headerlink" href="#browser" title="Permanent link">&para;</a></h2>
+<p>Run <a href="../../getting-started/install/#open-the-workspace-ui"><code>zeroshot ui</code></a>, then select a run in <strong>Runs</strong>.
+The read-only graph uses that run's admitted definition. Select a node for its inputs, outputs,
+decisions, and transcript; use the timeline to replay its history. Active runs update live.
+Seeking pauses following; <strong>Go live</strong> returns to the latest event. Scrolling a transcript keeps
+the graph live and follows new output only when you reach the bottom.</p>
+<p>For a direct target, open <code>/ui/</code> on its configured public origin. Closing either browser view
+leaves the run active.</p>
 <h2 id="foreground-and-detached-submission">Foreground and detached submission<a class="headerlink" href="#foreground-and-detached-submission" title="Permanent link">&para;</a></h2>
 <p><code>zeroshot run</code> follows the durable event stream by default and writes NDJSON. Add <code>--detach</code> to
 return after submission:</p>

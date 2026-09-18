@@ -1614,8 +1614,12 @@ The released container includes Zeroshot plus pinned Codex, Claude, and GitHub C
 </code></pre></div>
 <p>The target keeps running between runs. Docker restarts it after a reboot or unexpected exit with
 <code>--restart unless-stopped</code>; manually stopping it keeps it stopped until <code>docker start zeroshot-target</code>.
-Docker itself must be running. Target state persists in the named <code>zeroshot-data</code> volume, including
-when you recreate a container that was previously started with <code>--rm</code>.</p>
+Docker itself must be running. Stopping the target stops its runtime; restart retains history and
+marks interrupted runs as lost.</p>
+<p>The image's <code>target serve</code> process also serves the UI at <code>http://127.0.0.1:8080/ui/</code>.
+Profiles and run history persist under <code>--storage</code> in the named <code>zeroshot-data</code> volume, including
+when you recreate a container previously started with <code>--rm</code>. If you change the published port or
+use a proxy, set <code>--public-origin</code> to the exact browser origin.</p>
 <div class="admonition danger">
 <p class="admonition-title">Direct means unauthenticated</p>
 <p>Keep the published port on loopback or a trusted private network. Put an authenticated reverse
