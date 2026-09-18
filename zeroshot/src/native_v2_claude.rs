@@ -21,7 +21,8 @@ use std::path::{Path, PathBuf};
 use crate::execution::process::{HostedProcessPool, ProcessSessionCommand, ProcessStdout};
 use crate::native_v2_capsule::provider_process::{
     ClosedSessionFailure, ProviderExecution, ProviderExecutionFiles, ProviderProcessRunners,
-    CLAUDE_LOCAL_ENVIRONMENT, local_environment, provider_redactions, with_driver_detail,
+    CLAUDE_LOCAL_ENVIRONMENT, agent_workspace_access, local_environment, provider_redactions,
+    with_driver_detail,
 };
 use crate::native_v2_contract::{ClaudeProvider, NodeRuntimeBinding};
 use crate::native_v2_runner::{
@@ -30,7 +31,6 @@ use crate::native_v2_runner::{
 };
 use command::{
     ClaudeTurnArguments, claude_arguments, configure_provider, extend_declared_environment, prompt,
-    workspace_access,
 };
 use session::{ClaudeSession, attempt_session_id, observe_session};
 use transcript::{ClaudeAttempt, ClaudeEmission, ClaudeTranscript};
@@ -200,13 +200,14 @@ impl ClaudeAdapter {
                 "Claude command requires an agent runtime binding".to_owned(),
             ));
         };
+        let access = agent_workspace_access(invocation.role).map_err(|error| {
+            with_driver_detail(error, "Claude workspace policy rejected the node role")
+        })?;
         let argv = claude_arguments(
             self.prefix_arguments.clone(),
             ClaudeTurnArguments {
-                private_workspace: input.files.isolated_workspace,
                 model: model.as_str(),
                 effort: *effort,
-                role: invocation.role,
                 resume_id: input.resume_id,
                 json_schema: serde_json::to_string(
                     &invocation
@@ -219,10 +220,7 @@ impl ClaudeAdapter {
                     )
                 })?,
             },
-        )
-        .map_err(|error| {
-            with_driver_detail(error, "Claude command rejected the selected node role")
-        })?;
+        );
 
         let mut environment = self
             .process_environment(&invocation.environment, input.files.home())
@@ -240,9 +238,7 @@ impl ClaudeAdapter {
             environment,
             workspace: crate::execution::driver::WorkspaceCapability {
                 current_dir: input.files.workspace.clone(),
-                mode: workspace_access(invocation.role).map_err(|error| {
-                    with_driver_detail(error, "Claude workspace policy rejected the node role")
-                })?,
+                mode: access,
             },
             deadline: None,
         })
