@@ -201,6 +201,15 @@ with `npm i -g @the-open-engine-company/zeroshot` or build `zeroshot` with Cargo
   Managed copies and execution-scoped homes are removed only after confirmed process-tree cleanup;
   node-instance homes survive authorized continuation and loop revisits until session closure.
 
+- Native local CLI and in-process execution support Unix and Windows. Shared OS facilities live in
+  `execution::platform`; local controller transport selects Unix sockets or private Windows named
+  pipes behind one NDJSON protocol. Windows state uses protected current-user/SYSTEM ACLs, rejects
+  reparse points, and pins volume/file identity. Provider and delivery descendants belong to
+  kill-on-close Job Objects before their first instruction. Detached controllers inherit no caller
+  handles and resume only after proving they escaped every caller Job; restrictive Job policies
+  reject controller startup. Windows config defaults to
+  `%LOCALAPPDATA%/zeroshot` and state to its `state` directory. Hosted target isolation remains Linux-only.
+
 ## CLI and target contracts
 
 - CLI grammar/help comes from the derived Clap `Cli` tree and Rust doc comments.
@@ -368,7 +377,7 @@ Run the narrowest relevant checks first, then the complete affected lane.
 ```bash
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace
+cargo test --workspace # Unix; Windows: powershell -NoProfile -File scripts/test-windows.ps1
 RUSTDOCFLAGS=-Dwarnings cargo doc --workspace --no-deps
 
 npm run lint
@@ -390,7 +399,10 @@ python -m mkdocs build --strict
 ## Release convention
 
 - CI has native, Python, and repository-tooling lanes plus stable aggregate `required`. The native
-  lane also executes hosted process and filesystem boundary tests as root against its built test binary.
+  lane runs on Linux and Windows, including real local CLI subprocess tests. Windows uses
+  `scripts/test-windows.ps1` to run test executables outside Cargo's restrictive Job; the CI-only
+  `.github/scripts/test-windows-host.ps1` also starts outside the hosted runner's Job. Linux also executes
+  hosted process and filesystem boundary tests as root against its built test binary.
 - `.github/workflows/release.yml` is the only canonical product release workflow.
 - It publishes native archives/checksums, `ghcr.io/the-open-engine/zeroshot-target`, and
   `@the-open-engine-company/zeroshot`, then invokes Python revision `1`.

@@ -93,7 +93,7 @@ fn valid_status(snapshot: &RunSnapshot, status: &RunStatusResult) -> bool {
             .is_ok_and(|at| at <= i64::MAX as u64 && cursor_for(at) == status.at_cursor)
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 async fn local_status(root: &std::path::Path, id: &RunId) -> Option<RunStatusResult> {
     use crate::native_v2_portable_controller::{connect_transport, read_ready, PortableControllerPaths};
     use openengine_cluster_client::ClusterClient;
@@ -111,7 +111,7 @@ async fn local_status(root: &std::path::Path, id: &RunId) -> Option<RunStatusRes
         .ok()
 }
 
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 async fn local_status(_root: &std::path::Path, _id: &RunId) -> Option<RunStatusResult> {
     None
 }

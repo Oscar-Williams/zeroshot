@@ -1,6 +1,6 @@
 use super::*;
 use super::super::status::confirmed_failure;
-use openengine_cluster_protocol::{RunStatus, RunStatusParams, RunStatusResult};
+use openengine_cluster_protocol::{RunStatus, RunStatusParams};
 
 async fn failed_runtime() -> (Fixture, NativeRunHistory, NativeV2Observability) {
     let fixture = Fixture::new().await;
@@ -299,6 +299,7 @@ async fn failure_observation_requires_exact_run_canonical_cursor_and_reserved_re
 #[cfg(unix)]
 mod local {
     use super::*;
+    use openengine_cluster_protocol::RunStatusResult;
     use crate::native_v2_portable_controller::{PortableControllerPaths, PortableControllerReady};
     use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
     use tokio::net::UnixListener;
@@ -324,15 +325,20 @@ mod local {
         }
         fn ready(&self, path_id: &RunId, ready_id: &RunId) {
             let paths = self.paths(path_id);
-            std::fs::write(
-                paths.ready(),
-                serde_json::to_vec(&PortableControllerReady {
+            let file = crate::execution::platform::private_file(
+                &paths.ready(),
+                crate::execution::platform::FileAccess::ReadWrite,
+            )
+            .assert_value();
+            file.set_len(0).assert_value();
+            serde_json::to_writer(
+                file,
+                &PortableControllerReady {
                     kind: "zeroshot.portable-controller-ready/v1".into(),
                     run_id: ready_id.clone(),
                     socket: paths.socket(),
                     pid: std::process::id(),
-                })
-                .assert_value(),
+                },
             )
             .assert_value();
         }
@@ -465,7 +471,10 @@ mod local {
             let source = RuntimeStatusReader::Local(directory.0.clone());
             let snapshot = snapshot.clone();
             let operation = tokio::spawn(async move { source.failure(&snapshot).await });
-            request.await.assert_value();
+            tokio::time::timeout(Duration::from_secs(5), request)
+                .await
+                .assert_value()
+                .assert_value();
             if cancel {
                 operation.abort();
                 assert!(operation.await.is_err_and(|error| error.is_cancelled()));

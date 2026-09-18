@@ -23,12 +23,14 @@ const NATIVE_PREFIXES = [
 const NATIVE_PATHS = new Set([
   '.dockerignore',
   '.github/workflows/release.yml',
+  '.github/scripts/test-windows-host.ps1',
   'Cargo.lock',
   'Cargo.toml',
   'clippy.toml',
   'rust-toolchain.toml',
   'rustfmt.toml',
   'scripts/distribution.js',
+  'scripts/test-windows.ps1',
   'tests/tooling/smoke-ui.js',
 ]);
 

@@ -47,9 +47,8 @@ pub(super) fn write_and_commit(
     writer.write_all(contents).map_err(local_io)?;
     writer.flush().map_err(local_io)?;
     writer.get_ref().sync_all().map_err(local_io)?;
-    std::fs::rename(paths.temporary, paths.destination).map_err(local_io)?;
-    File::open(paths.parent)
-        .and_then(|directory| directory.sync_all())
+    drop(writer);
+    crate::execution::platform::commit_file(paths.temporary, paths.destination, paths.parent)
         .map_err(local_io)
 }
 
@@ -57,11 +56,25 @@ fn local_io(error: std::io::Error) -> NativeV2CliError {
     NativeV2CliError::Local(error.to_string())
 }
 
-#[cfg(any(unix, feature = "ui"))]
 pub(crate) fn default_local_state_root() -> Result<PathBuf, NativeV2CliError> {
     if let Some(path) = nonempty_environment("ZEROSHOT_STATE_DIR") {
         return absolute_user_path(path, "controller state path must be absolute");
     }
+    #[cfg(windows)]
+    {
+        let root = nonempty_environment("LOCALAPPDATA")
+            .ok_or_else(|| NativeV2CliError::Local("LOCALAPPDATA is unavailable".into()))?;
+        absolute_user_path(
+            PathBuf::from(root).join("zeroshot").join("state"),
+            "controller state path must be absolute",
+        )
+    }
+    #[cfg(unix)]
+    default_unix_state_root()
+}
+
+#[cfg(unix)]
+fn default_unix_state_root() -> Result<PathBuf, NativeV2CliError> {
     if let Some(path) = nonempty_environment("XDG_STATE_HOME") {
         return absolute_user_path(
             PathBuf::from(path).join("zeroshot"),

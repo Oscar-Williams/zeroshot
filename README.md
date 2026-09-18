@@ -139,7 +139,7 @@ submitting runs.
 ```bash
 npm ci
 npm run check
-cargo test --workspace
+cargo test --workspace # Unix; Windows: powershell -NoProfile -File scripts/test-windows.ps1
 ```
 
 Node.js builds the static UI and supports repository tooling and npm delivery; Rust serves the UI.

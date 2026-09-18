@@ -14,7 +14,7 @@ Node.js builds the UI and runs repository tooling; Rust serves the UI.
 
 ```bash
 npm ci
-cargo test --workspace
+cargo test --workspace # Unix; Windows: powershell -NoProfile -File scripts/test-windows.ps1
 python -m venv sdks/python/.venv
 sdks/python/.venv/bin/python -m pip install -e 'sdks/python[dev]' -r docs/requirements.lock
 ```
@@ -42,7 +42,7 @@ Start with the narrowest relevant command, then run broader checks before handof
 ```bash
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace
+cargo test --workspace # Unix; Windows: powershell -NoProfile -File scripts/test-windows.ps1
 RUSTDOCFLAGS=-Dwarnings cargo doc --workspace --no-deps
 
 npm run lint

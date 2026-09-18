@@ -34,7 +34,8 @@ impl TestDirectory {
             std::process::id(),
             NEXT_DIRECTORY.fetch_add(1, Ordering::Relaxed)
         ));
-        std::fs::create_dir_all(&path).assert_value_with("create portable test directory");
+        crate::execution::platform::create_private_directory(&path)
+            .assert_value_with("create private portable test directory");
         Self(path)
     }
 
@@ -147,7 +148,17 @@ async fn one_run_server_is_ready_reconnectable_and_rejects_external_submission()
         .await
         .assert_value_with("start portable controller"),
     );
+    #[cfg(unix)]
     assert_eq!(controller.paths().socket(), storage.join("controller.sock"));
+    #[cfg(windows)]
+    assert!(
+        controller
+            .paths()
+            .socket()
+            .to_str()
+            .unwrap()
+            .starts_with(r"\\.\pipe\zeroshot-")
+    );
     assert_eq!(
         controller.paths().ready(),
         storage.join("controller.ready.json")
@@ -241,7 +252,8 @@ async fn one_controller_exclusively_owns_a_workspace() {
 async fn observer_reconciles_process_loss_without_constructing_or_dispatching_a_runtime() {
     let root = TestDirectory::new("observer");
     let storage = root.child("state");
-    std::fs::create_dir(&storage).assert_value_with("state directory");
+    crate::execution::platform::create_private_directory(&storage)
+        .assert_value_with("private state directory");
     let paths = PortableControllerPaths::new(storage);
     let run_id = RunId::new("run-portable-lost");
     let submitted = submission("portable-lost");

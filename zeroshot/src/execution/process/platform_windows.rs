@@ -1,4 +1,5 @@
 use std::io;
+use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
 
 use tokio::process::Command;
 use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, INVALID_HANDLE_VALUE};
@@ -49,12 +50,20 @@ static INJECT_ASSIGN_FAILURE: std::sync::atomic::AtomicBool =
 static INJECT_RESUME_FAILURE: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 #[cfg(test)]
+static TEST_PROCESS_ID: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+#[cfg(test)]
+static TEST_JOB: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+#[cfg(test)]
 static JOB_CLOSE_COUNT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
 impl WindowsContainmentCalls for SystemWindowsContainmentCalls<'_> {
     fn assign(&mut self) -> Result<(), io::Error> {
         #[cfg(test)]
-        if INJECT_ASSIGN_FAILURE.swap(false, std::sync::atomic::Ordering::SeqCst) {
+        if self.process_id == TEST_PROCESS_ID.load(std::sync::atomic::Ordering::SeqCst) {
+            TEST_JOB.store(self.job, std::sync::atomic::Ordering::SeqCst);
+        }
+        #[cfg(test)]
+        if self.injected_error(&INJECT_ASSIGN_FAILURE) {
             return Err(io::Error::other("injected assignment failure"));
         }
         let assigned = unsafe { AssignProcessToJobObject(self.job as HANDLE, self.process) };
@@ -67,7 +76,7 @@ impl WindowsContainmentCalls for SystemWindowsContainmentCalls<'_> {
 
     fn resume(&mut self) -> Result<(), io::Error> {
         #[cfg(test)]
-        if INJECT_RESUME_FAILURE.swap(false, std::sync::atomic::Ordering::SeqCst) {
+        if self.injected_error(&INJECT_RESUME_FAILURE) {
             return Err(io::Error::other("injected resume failure"));
         }
         resume_suspended_process(self.process_id)
@@ -128,41 +137,36 @@ fn resume_suspended_process(process_id: u32) -> Result<(), io::Error> {
     if snapshot == INVALID_HANDLE_VALUE {
         return Err(io::Error::last_os_error());
     }
+    let snapshot = unsafe { OwnedHandle::from_raw_handle(snapshot) };
     let mut entry = THREADENTRY32 {
         dwSize: u32::try_from(std::mem::size_of::<THREADENTRY32>())
             .expect("thread entry fits in u32"),
         ..THREADENTRY32::default()
     };
-    let mut has_entry = unsafe { Thread32First(snapshot, &mut entry) } != 0;
+    let mut has_entry = unsafe { Thread32First(snapshot.as_raw_handle(), &mut entry) } != 0;
     while has_entry {
-        if entry.th32OwnerProcessID == process_id {
-            let thread = unsafe { OpenThread(THREAD_SUSPEND_RESUME, 0, entry.th32ThreadID) };
-            if thread.is_null() {
-                let error = io::Error::last_os_error();
-                unsafe {
-                    CloseHandle(snapshot);
-                }
-                return Err(error);
-            }
-            let resumed = unsafe { ResumeThread(thread) };
-            unsafe {
-                CloseHandle(thread);
-                CloseHandle(snapshot);
-            }
-            return if resumed == u32::MAX {
-                Err(io::Error::last_os_error())
-            } else {
-                Ok(())
-            };
+        if entry.th32OwnerProcessID == process_id && resume_thread(entry.th32ThreadID)? {
+            return Ok(());
         }
-        has_entry = unsafe { Thread32Next(snapshot, &mut entry) } != 0;
-    }
-    unsafe {
-        CloseHandle(snapshot);
+        has_entry = unsafe { Thread32Next(snapshot.as_raw_handle(), &mut entry) } != 0;
     }
     Err(io::Error::other(
         "spawned process suspended thread is unavailable",
     ))
+}
+
+fn resume_thread(thread_id: u32) -> io::Result<bool> {
+    let thread = unsafe { OpenThread(THREAD_SUSPEND_RESUME, 0, thread_id) };
+    if thread.is_null() {
+        return Err(io::Error::last_os_error());
+    }
+    let thread = unsafe { OwnedHandle::from_raw_handle(thread) };
+    match unsafe { ResumeThread(thread.as_raw_handle()) } {
+        u32::MAX => Err(io::Error::last_os_error()),
+        // Running auxiliary threads do not prove that the suspended launch thread resumed.
+        0 => Ok(false),
+        _ => Ok(true),
+    }
 }
 
 pub(super) fn create_kill_on_close_job() -> Result<usize, io::Error> {
@@ -210,15 +214,35 @@ pub(super) fn job_has_live_members(job: usize) -> Result<bool, io::Error> {
 
 pub(super) fn close_job(job: usize) {
     #[cfg(test)]
-    JOB_CLOSE_COUNT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    if TEST_JOB
+        .compare_exchange(
+            job,
+            0,
+            std::sync::atomic::Ordering::SeqCst,
+            std::sync::atomic::Ordering::SeqCst,
+        )
+        .is_ok()
+    {
+        JOB_CLOSE_COUNT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }
     unsafe {
         CloseHandle(job as HANDLE);
     }
 }
 
 #[cfg(test)]
+impl SystemWindowsContainmentCalls<'_> {
+    fn injected_error(&self, flag: &std::sync::atomic::AtomicBool) -> bool {
+        use std::sync::atomic::Ordering;
+        self.process_id == TEST_PROCESS_ID.load(Ordering::SeqCst)
+            && flag.swap(false, Ordering::SeqCst)
+    }
+}
+
+#[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
+
+    use std::path::{Path, PathBuf};
     use std::process::Stdio;
     use std::sync::atomic::Ordering;
 
@@ -229,6 +253,12 @@ mod tests {
         ProcessCleanupEvidence, ProcessContainment, ProcessTreeRegistration, capture_process_tree,
         configure_process, register_process_tree_for, terminate_process_tree,
     };
+
+    #[test]
+    fn an_already_running_thread_does_not_acknowledge_process_resume() {
+        let current = unsafe { windows_sys::Win32::System::Threading::GetCurrentThreadId() };
+        assert!(!super::resume_thread(current).unwrap());
+    }
 
     fn spawn_suspended_sentinel(
         name: &str,
@@ -243,7 +273,9 @@ mod tests {
             sentinel.display()
         );
         let mut command = tokio::process::Command::new(program);
-        command.args(["/D", "/S", "/C", &script]);
+        use std::os::windows::process::CommandExt;
+        command.args(["/D", "/S", "/C"]);
+        command.as_std_mut().raw_arg(format!("\"{script}\""));
         command.current_dir(std::env::temp_dir());
         command.env_clear();
         command.env("SystemRoot", system_root);
@@ -253,10 +285,11 @@ mod tests {
         command.kill_on_drop(true);
         configure_process(&mut command, ProcessContainment::ProcessGroup);
         let child = command.spawn().unwrap();
+        super::TEST_PROCESS_ID.store(child.id().unwrap(), Ordering::SeqCst);
         (registration, child, sentinel)
     }
 
-    async fn assert_still_suspended(sentinel: &PathBuf) {
+    async fn assert_still_suspended(sentinel: &Path) {
         tokio::time::sleep(Duration::from_millis(100)).await;
         assert!(
             !sentinel.exists(),
@@ -264,7 +297,7 @@ mod tests {
         );
     }
 
-    async fn wait_for_sentinel(sentinel: &PathBuf) {
+    async fn wait_for_sentinel(sentinel: &Path) {
         let deadline = Instant::now() + Duration::from_secs(2);
         while !sentinel.exists() {
             assert!(

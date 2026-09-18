@@ -41,7 +41,6 @@ pub use lifecycle::{
     CliRunWatchEventNotification,
 };
 
-#[cfg(unix)]
 #[path = "native_v2_cli/local.rs"]
 pub mod local;
 
@@ -65,7 +64,6 @@ pub use profile_contract::*;
 
 mod support;
 use support::{absolute_user_path, nonempty_environment};
-#[cfg(any(unix, feature = "ui"))]
 pub(crate) use support::default_local_state_root;
 pub use support::VERSION;
 

@@ -63,7 +63,7 @@ jobs:
           node-version: 24
           cache: npm
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
         with:
           toolchain: 1.97.0
 
@@ -83,16 +83,24 @@ jobs:
         run: npm run protocol:check
 
   native-check:
-    name: Native product
+    name: Native product (${{ matrix.os }})
     needs: classify
     if: needs.classify.outputs.native == 'true'
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     steps:
+      - name: Preserve source line endings on Windows
+        if: runner.os == 'Windows'
+        run: git config --global core.autocrlf false
+
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
         with:
           toolchain: 1.97.0
           components: clippy,rustfmt
@@ -104,6 +112,7 @@ jobs:
           cache-dependency-path: ui/package-lock.json
 
       - name: Build and test embedded UI
+        shell: bash
         run: |
           npm --prefix ui ci --ignore-scripts
           npm --prefix ui run build
@@ -113,16 +122,24 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Run Clippy
+        shell: bash
         run: |
           cargo clippy --workspace --all-targets -- -D warnings
           cargo clippy --package zeroshot --all-targets --features ui -- -D warnings
 
       - name: Run workspace tests
+        if: runner.os != 'Windows'
         run: |
           cargo test --workspace
           cargo test --package zeroshot --features ui
 
+      - name: Run Windows workspace tests
+        if: runner.os == 'Windows'
+        run: ./.github/scripts/test-windows-host.ps1
+
       - name: Test hosted process and filesystem boundaries as root
+        if: runner.os == 'Linux'
+        shell: bash
         run: |
           # Exercise mapped namespaces on this disposable runner, including Ubuntu AppArmor hosts.
           if [[ -f /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]]; then
@@ -163,10 +180,11 @@ jobs:
         run: cargo doc --workspace --no-deps
 
       - name: Build and smoke canonical executable
+        shell: bash
         run: |
           cargo build --locked --release --package zeroshot --bin zeroshot --features ui
           target/release/zeroshot --version
-          node tests/tooling/smoke-ui.js --binary target/release/zeroshot
+          node tests/tooling/smoke-ui.js --binary target/release/zeroshot${{ runner.os == 'Windows' && '.exe' || '' }}
 
   python-check:
     name: Python SDK

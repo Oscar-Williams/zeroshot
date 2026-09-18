@@ -102,7 +102,11 @@ async function local(binary) {
     await smoke(address);
     child.kill('SIGTERM');
     const result = await within(exited, 20_000);
-    assert.deepEqual(result, { code: 0, signal: null }, output);
+    assert.deepEqual(
+      result,
+      process.platform === 'win32' ? { code: null, signal: 'SIGTERM' } : { code: 0, signal: null },
+      output
+    );
   } finally {
     if (!settled) {
       child.kill('SIGKILL');
