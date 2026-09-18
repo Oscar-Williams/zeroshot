@@ -135,6 +135,7 @@ pub(super) struct FakeBackend {
     pending_watch: bool,
     reconnect_watch: bool,
     permanent_reopen_watch: bool,
+    target_transport_reopen_watch: bool,
     reconnect_logs: bool,
     attach_behavior: AttachBehavior,
     failed_watch: bool,
@@ -215,6 +216,13 @@ impl FakeBackend {
     pub(super) fn with_reconnecting_attach_after_slow_consumer() -> Self {
         Self {
             attach_behavior: AttachBehavior::SlowConsumer,
+            ..Self::default()
+        }
+    }
+
+    pub(super) fn with_attach_connection_failure(attempt: usize) -> Self {
+        Self {
+            attach_behavior: AttachBehavior::TransportError { attempt },
             ..Self::default()
         }
     }
@@ -425,6 +433,9 @@ impl NativeV2CliBackend for FakeBackend {
         if let Some(result) = permanent_reopen_watch(self, &params, attempt) {
             return result;
         }
+        if self.target_transport_reopen_watch && attempt == 2 {
+            return Err(target_transport_error());
+        }
         if self.queued_lifecycle {
             return Ok(queued_watch(&params, attempt));
         }
@@ -534,13 +545,16 @@ impl NativeV2CliBackend for FakeBackend {
                 }]))
             }
             (AttachBehavior::ProtocolError, _) => Ok(FakeSubscription::protocol_error()),
+            (AttachBehavior::TransportError { attempt: failed }, current) if failed == current => {
+                Err(target_transport_error())
+            }
             (_, 2..) => Ok(FakeSubscription::items(vec![
                 attach_event(&params, attempt, "after reconnect"),
                 CliSubscriptionItem::Closed {
                     reason: SubscriptionCloseReason::Done,
                 },
             ])),
-            (AttachBehavior::Disconnect, _) => {
+            (AttachBehavior::Disconnect | AttachBehavior::TransportError { .. }, _) => {
                 Ok(FakeSubscription::disconnect_after(vec![attach_event(
                     &params,
                     attempt,
@@ -587,4 +601,12 @@ pub(super) struct ImmediateDetach;
 #[async_trait]
 impl DetachSignal for ImmediateDetach {
     async fn wait(&mut self) {}
+}
+
+fn target_transport_error() -> NativeV2CliError {
+    NativeV2CliError::TargetTransport {
+        name: "prod".to_owned(),
+        origin: "https://target.example".to_owned(),
+        message: "target discovery failed: connection refused".to_owned(),
+    }
 }
