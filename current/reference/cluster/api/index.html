@@ -1888,6 +1888,84 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#runresume" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        run/resume
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="run/resume">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#parameters_19" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Parameters
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#result_19" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Result
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#rundiscard_workspace" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        run/discard_workspace
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="run/discard_workspace">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#parameters_20" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Parameters
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#result_20" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Result
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -2993,6 +3071,84 @@
         
           <li class="md-nav__item">
   <a href="#result_18" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Result
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#runresume" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        run/resume
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="run/resume">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#parameters_19" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Parameters
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#result_19" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Result
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#rundiscard_workspace" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        run/discard_workspace
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="run/discard_workspace">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#parameters_20" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Parameters
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#result_20" class="md-nav__link">
     <span class="md-ellipsis">
       
         Result
@@ -4121,6 +4277,128 @@
 <tr>
 <td><code>runForceResult</code></td>
 <td><a href="../schema.json#/$defs/RunForceResult"><code>schema.json#/$defs/RunForceResult</code></a></td>
+</tr>
+</tbody>
+</table>
+<h3 id="runresume"><code>run/resume</code><a class="headerlink" href="#runresume" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Parameter structure</th>
+<th>Transport</th>
+<th>Server push</th>
+<th>Inbound notifications</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>by-name</code></td>
+<td>Unary</td>
+<td>No</td>
+<td>No</td>
+</tr>
+</tbody>
+</table>
+<h4 id="parameters_19">Parameters<a class="headerlink" href="#parameters_19" title="Permanent link">&para;</a></h4>
+<table>
+<thead>
+<tr>
+<th>Name</th>
+<th>Required</th>
+<th>Schema</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>runId</code></td>
+<td>Yes</td>
+<td><code>{&quot;type&quot;:&quot;string&quot;}</code></td>
+</tr>
+<tr>
+<td><code>successorRunId</code></td>
+<td>Yes</td>
+<td><code>{&quot;type&quot;:&quot;string&quot;}</code></td>
+</tr>
+<tr>
+<td><code>connections</code></td>
+<td>No</td>
+<td><code>{&quot;additionalProperties&quot;:false,&quot;patternProperties&quot;:{&quot;^[^\u0000-\u001f\u007f-\u009f]+$&quot;:{&quot;$ref&quot;:&quot;#/$defs/StaticConnectionValues&quot;}},&quot;type&quot;:&quot;object&quot;}</code></td>
+</tr>
+<tr>
+<td><code>connectionResolver</code></td>
+<td>No</td>
+<td><code>{&quot;anyOf&quot;:[{&quot;$ref&quot;:&quot;#/$defs/TargetConnectionResolver&quot;},{&quot;type&quot;:&quot;null&quot;}]}</code></td>
+</tr>
+<tr>
+<td><code>githubToken</code></td>
+<td>No</td>
+<td><code>{&quot;type&quot;:[&quot;string&quot;,&quot;null&quot;]}</code></td>
+</tr>
+</tbody>
+</table>
+<h4 id="result_19">Result<a class="headerlink" href="#result_19" title="Permanent link">&para;</a></h4>
+<table>
+<thead>
+<tr>
+<th>Name</th>
+<th>Schema</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>runResumeResult</code></td>
+<td><a href="../schema.json#/$defs/RunResumeResult"><code>schema.json#/$defs/RunResumeResult</code></a></td>
+</tr>
+</tbody>
+</table>
+<h3 id="rundiscard_workspace"><code>run/discard_workspace</code><a class="headerlink" href="#rundiscard_workspace" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Parameter structure</th>
+<th>Transport</th>
+<th>Server push</th>
+<th>Inbound notifications</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>by-name</code></td>
+<td>Unary</td>
+<td>No</td>
+<td>No</td>
+</tr>
+</tbody>
+</table>
+<h4 id="parameters_20">Parameters<a class="headerlink" href="#parameters_20" title="Permanent link">&para;</a></h4>
+<table>
+<thead>
+<tr>
+<th>Name</th>
+<th>Required</th>
+<th>Schema</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>runId</code></td>
+<td>Yes</td>
+<td><code>{&quot;type&quot;:&quot;string&quot;}</code></td>
+</tr>
+</tbody>
+</table>
+<h4 id="result_20">Result<a class="headerlink" href="#result_20" title="Permanent link">&para;</a></h4>
+<table>
+<thead>
+<tr>
+<th>Name</th>
+<th>Schema</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>runDiscardWorkspaceResult</code></td>
+<td><a href="../schema.json#/$defs/RunDiscardWorkspaceResult"><code>schema.json#/$defs/RunDiscardWorkspaceResult</code></a></td>
 </tr>
 </tbody>
 </table>
