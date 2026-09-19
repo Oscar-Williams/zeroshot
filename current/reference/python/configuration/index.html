@@ -2260,7 +2260,7 @@ target's stored origin and login.</p>
 
 
 <h2 id="zeroshot.Preset" class="doc doc-heading">
-<code class="doc-symbol doc-symbol-heading doc-symbol-class"></code>              <code class="highlight language-python"><span class="n">Preset</span><span class="p">(</span><span class="n">name</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">delivery</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s1">'none'</span><span class="p">)</span></code>
+<code class="doc-symbol doc-symbol-heading doc-symbol-class"></code>              <code class="highlight language-python"><span class="n">Preset</span><span class="p">(</span><span class="n">name</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">delivery</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s1">'none'</span><span class="p">,</span> <span class="n">pull_request_feedback</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s1">'consider'</span><span class="p">)</span></code>
 
   <span class="doc doc-labels">
       <small class="doc doc-label doc-label-dataclass"><code>dataclass</code></small>
@@ -2293,7 +2293,18 @@ target's stored origin and login.</p>
 )
           –
           <div class="doc-md-description">
-            <p>Native delivery selector: none, pull_request, or merge.</p>
+            <p>Native delivery selector: none, push, pull_request, or merge.</p>
+          </div>
+        </li>
+        <li class="doc-section-item field-body">
+            <b><code>pull_request_feedback</code></b>
+              (<code><span title="str">str</span></code>, default:
+                  <code>&#39;consider&#39;</code>
+)
+          –
+          <div class="doc-md-description">
+            <p>Whether pull-request feedback is considered or ignored for
+pull_request and merge delivery.</p>
           </div>
         </li>
     </ul>

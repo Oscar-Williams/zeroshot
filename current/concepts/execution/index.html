@@ -1706,8 +1706,15 @@ read and stop commands.</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="go">zeroshot template list</span>
 <a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="go">zeroshot template show software-change</span>
 </code></pre></div>
-<p><code>software-change</code> adds pull-request or merge delivery through <code>--pr</code> or <code>--ship</code>. That delivery is a
-graph node with its own runtime binding rather than an unrecorded agent side effect.</p>
+<p><code>software-change</code> has four delivery choices. The default keeps the accepted change local. <code>--push</code>
+publishes the managed run branch without opening a pull request. <code>--pr</code> opens or updates a pull
+request, processes visible review feedback, waits for required CI and a conflict-free head, then
+stops without merging. <code>--ship</code> uses the same feedback loop before it follows the repository's merge
+policy and confirms the merged revision. Missing approval doesn't block <code>--pr</code>; it still blocks
+<code>--ship</code> when GitHub requires it.</p>
+<p>PR and merge delivery consider feedback by default. Use <code>--no-pr-feedback</code>, or set
+<code>pullRequestFeedback</code> to <code>ignore</code> on the delivery runtime binding, when the run should ignore PR
+discussion. CI, conflict, freshness, and merge-policy checks remain active.</p>
 
 
 
