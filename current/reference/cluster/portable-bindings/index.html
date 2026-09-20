@@ -573,6 +573,8 @@
       
         
       
+        
+      
     
     
     
@@ -633,6 +635,34 @@
     
   
     Observe and control runs
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../guides/acp/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Use a local graph as an ACP agent
   
 
     
@@ -1528,7 +1558,9 @@ protocol. Descriptor fields cannot carry commands, endpoints, credential values,
 execution configuration.</p>
 <h2 id="availability">Availability<a class="headerlink" href="#availability" title="Permanent link">&para;</a></h2>
 <p>Zeroshot does not currently ship a portable worker binding. An ACP binding is under development;
-there is no supported version, profile identifier, compatibility claim, or production runtime yet.</p>
+there is no supported version, profile identifier, compatibility claim, or production runtime yet.
+The experimental local <a href="../../../guides/acp/"><code>zeroshot acp</code></a> endpoint instead exposes a complete
+graph to an ACP client; it is not a portable worker binding.</p>
 <p>Native graph nodes use the reserved <code>openengine.worker.builtin/v1</code> binding. That binding describes
 in-process Zeroshot workers and is not a portable protocol adapter.</p>
 <h2 id="extension-boundary">Extension boundary<a class="headerlink" href="#extension-boundary" title="Permanent link">&para;</a></h2>
