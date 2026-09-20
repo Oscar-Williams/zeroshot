@@ -67,6 +67,52 @@ impl ControllerLease {
             .and_then(|file| platform::file_identity(&file))
             .is_ok_and(|identity| identity == self.identity)
     }
+
+    /// Checks whether an existing private lease is owned without creating or changing it.
+    #[cfg(feature = "ui")]
+    pub(crate) fn is_held(path: &Path) -> Result<bool, ControllerLeaseError> {
+        reject_non_file(path)?;
+        let file = platform::private_file(path, FileAccess::ReadWriteExisting)
+            .map_err(|_| ControllerLeaseError::InvalidPath)?;
+        match file.try_lock_exclusive() {
+            Ok(()) => {
+                FileExt::unlock(&file).map_err(|_| ControllerLeaseError::InvalidPath)?;
+                Ok(false)
+            }
+            Err(error) if lock_is_contended(&error) => Ok(true),
+            Err(_) => Err(ControllerLeaseError::InvalidPath),
+        }
+    }
+}
+
+#[cfg(feature = "ui")]
+fn lock_is_contended(error: &io::Error) -> bool {
+    if error.raw_os_error() == fs2::lock_contended_error().raw_os_error() {
+        return true;
+    }
+    #[cfg(windows)]
+    {
+        // LockFileEx can report an overlapping exclusive lock as asynchronous contention.
+        error.raw_os_error() == Some(windows_sys::Win32::Foundation::ERROR_IO_PENDING as i32)
+    }
+    #[cfg(not(windows))]
+    false
+}
+
+#[cfg(all(test, feature = "ui", windows))]
+#[test]
+fn windows_lock_probe_accepts_only_contention_errors() {
+    use windows_sys::Win32::Foundation::{ERROR_ACCESS_DENIED, ERROR_IO_PENDING, ERROR_LOCK_VIOLATION};
+
+    assert!(lock_is_contended(&io::Error::from_raw_os_error(
+        ERROR_LOCK_VIOLATION as i32,
+    )));
+    assert!(lock_is_contended(&io::Error::from_raw_os_error(
+        ERROR_IO_PENDING as i32,
+    )));
+    assert!(!lock_is_contended(&io::Error::from_raw_os_error(
+        ERROR_ACCESS_DENIED as i32,
+    )));
 }
 
 impl std::fmt::Debug for ControllerLease {

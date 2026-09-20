@@ -268,6 +268,15 @@ with `npm i -g @the-open-engine-company/zeroshot` or build `zeroshot` with Cargo
   handles and resume only after proving they escaped every caller Job; restrictive Job policies
   reject controller startup. Windows config defaults to
   `%LOCALAPPDATA%/zeroshot` and state to its `state` directory. Hosted target isolation remains Linux-only.
+- The experimental local ACP endpoint owns one workspace lease and reusable runner for the outer
+  ACP session. Each prompt remains a separate admitted run with its own controller lock, durable
+  ledger, supervisor lifecycle, run ID, and freshly resolved Git source provenance. Owner-scoped
+  node sessions use stable slots derived from sorted graph node names, survive clean turn settlement,
+  and close before the ACP session releases its runtime directory or workspace lease. Workspace
+  identity, workspace lease, controller lease, and an ACP-specific turn lease are monitored;
+  loss terminalizes active work as `runtime_lost` and poisons the session. The local UI requires both
+  per-run leases before treating an in-process ACP owner without a controller socket as live.
+  Ordinary runs retain run-scoped session keys.
 
 ## CLI and target contracts
 

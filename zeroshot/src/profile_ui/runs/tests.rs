@@ -176,12 +176,58 @@ impl Fixture {
         Self::with_graph(graph, json!({"request":"Write a migration report"})).await
     }
 
+    async fn new_with_embedded_leases() -> (
+        Self,
+        crate::native_v2_portable_controller::ControllerLease,
+        crate::native_v2_portable_controller::ControllerLease,
+    ) {
+        let graph: CompiledGraphIr = serde_json::from_str(include_str!(
+            "../../../../protocol/openengine-cluster/v1/fixtures/graph/canonical/base.json"
+        ))
+        .assert_value();
+        let (fixture, leases) =
+            Self::build(graph, json!({"request":"Write a migration report"}), true).await;
+        let (controller, acp_turn) = leases.assert_value();
+        (fixture, controller, acp_turn)
+    }
+
     async fn with_graph(graph: CompiledGraphIr, initial_input: Value) -> Self {
+        Self::build(graph, initial_input, false).await.0
+    }
+
+    async fn build(
+        graph: CompiledGraphIr,
+        initial_input: Value,
+        hold_embedded_leases: bool,
+    ) -> (
+        Self,
+        Option<(
+            crate::native_v2_portable_controller::ControllerLease,
+            crate::native_v2_portable_controller::ControllerLease,
+        )>,
+    ) {
         let root = std::env::temp_dir().join(format!("zeroshot-history-{}", uuid::Uuid::now_v7()));
         let id = RunId::new(uuid::Uuid::now_v7().to_string());
-        let directory = root.join("runs").join(id.as_str());
-        std::fs::create_dir_all(&directory).assert_value();
-        let ledger = SqliteRunLedger::open(directory.join("runs.sqlite3")).assert_value();
+        let runs = root.join("runs");
+        crate::execution::platform::private_directory(&runs)
+            .assert_value_with("prepare profile UI fixture runs directory");
+        let directory = runs.join(id.as_str());
+        crate::execution::platform::create_private_directory(&directory)
+            .assert_value_with("create profile UI fixture run directory");
+        let paths =
+            crate::native_v2_portable_controller::PortableControllerPaths::new(directory.clone());
+        let controller_leases = hold_embedded_leases.then(|| {
+            let controller =
+                crate::native_v2_portable_controller::ControllerLease::acquire(paths.lease())
+                    .assert_value_with("acquire embedded controller lease fixture");
+            let acp_turn = crate::native_v2_portable_controller::ControllerLease::acquire(
+                paths.acp_turn_lease(),
+            )
+            .assert_value_with("acquire ACP turn lease fixture");
+            (controller, acp_turn)
+        });
+        let ledger = SqliteRunLedger::open(directory.join("runs.sqlite3"))
+            .assert_value_with("open profile UI fixture ledger");
         ledger
             .create_or_get(CreateRun {
                 run_id: id.clone(),
@@ -205,13 +251,16 @@ impl Fixture {
                 },
             })
             .await
-            .assert_value();
-        Self {
-            service: NativeRunHistory::new(root.clone()),
-            root,
-            id,
-            ledger,
-        }
+            .assert_value_with("create profile UI fixture run");
+        (
+            Self {
+                service: NativeRunHistory::new(root.clone()),
+                root,
+                id,
+                ledger,
+            },
+            controller_leases,
+        )
     }
     fn reference(&self, execution: u64) -> ExecutionRef {
         ExecutionRef {
@@ -239,7 +288,7 @@ impl Fixture {
                 ],
             )
             .await
-            .assert_value();
+            .assert_value_with("append profile UI fixture start");
     }
 }
 

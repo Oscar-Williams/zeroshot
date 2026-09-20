@@ -25,7 +25,15 @@ pub(crate) use native::{
 pub(crate) enum FileAccess {
     Read,
     ReadWrite,
+    #[cfg(feature = "ui")]
+    ReadWriteExisting,
     CreateNew,
+}
+
+impl FileAccess {
+    fn repairs_security(self) -> bool {
+        matches!(self, Self::ReadWrite | Self::CreateNew)
+    }
 }
 
 pub(crate) fn private_file(path: &Path, access: FileAccess) -> io::Result<File> {
