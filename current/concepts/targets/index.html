@@ -1610,15 +1610,17 @@ shell settings. Explicit gateway selections use their <code>GATEWAY_BASE_URL</co
 <code>anthropic</code> runs also inherit Claude's shell provider-selection flags. Explicit <code>openrouter</code>,
 <code>bedrock</code>, and <code>gateway</code> selections retain their provider setup and reject declared transport flags
 that would route to an incompatible provider.</p>
-<p>Local and hosted Codex and Claude workers and verifiers default to
-<code>--dangerously-bypass-approvals-and-sandbox</code> or <code>--dangerously-skip-permissions</code>, respectively,
-when no permission policy is configured. Before each
-turn, Zeroshot queries the harness's resolved settings without sending a model prompt. Explicit approval, sandbox,
-permission rules, and managed restrictions take precedence: Zeroshot adds no bypass flag in those
-cases. Claude shell permission controls are inherited locally too. If inspection fails or the CLI
-does not support it, the harness keeps its native permission behavior. Inspection adds one CLI
-startup per turn and is bounded to ten seconds; it does not rewrite settings files, though the CLI
-may update its own startup state.</p>
+<p>Hosted Codex and Claude workers and verifiers always run with
+<code>--dangerously-bypass-approvals-and-sandbox</code> or <code>--dangerously-skip-permissions</code>, respectively.
+Zeroshot does not inspect the harness's native permission policy for hosted turns; the disposable
+capsule is the isolation boundary.</p>
+<p>Local Codex and Claude workers and verifiers use those flags only when no permission policy is
+configured. Before each local turn, Zeroshot queries the harness's resolved settings without sending
+a model prompt. Explicit approval, sandbox, permission rules, and managed restrictions take
+precedence, so Zeroshot adds no bypass flag in those cases. Claude shell permission controls are
+inherited locally too. If inspection fails or the CLI does not support it, the harness keeps its
+native permission behavior. Inspection adds one CLI startup per local turn and is bounded to ten
+seconds; it does not rewrite settings files, though the CLI may update its own startup state.</p>
 <p>Every agent verifier node, including those in custom profiles, uses the same permission handling as
 workers. Zeroshot automatically adds instructions to inspect without modifying source, tests,
 configuration, or other material under review or implementing repairs. Verifiers may run checks and
@@ -1629,10 +1631,11 @@ the results.</p>
 not a filesystem boundary. Hosted verifiers retain disposable writable copies; their process and
 filesystem isolation remains in force.</p>
 <p>Zeroshot controls the response format and session continuation. Web search follows Codex's
-configuration: by default it uses live search with full access and cached search otherwise.
-An explicit <code>web_search="cached"</code> also prevents Zeroshot from adding bypass, because Codex can
-otherwise promote it to live search under full access. Explicit web-search settings remain unchanged.
-Command network access follows the selected sandbox policy, including any configured restrictions.</p>
+configuration: by default it uses live search with full access and cached search otherwise. For local
+runs, an explicit <code>web_search="cached"</code> prevents Zeroshot from adding bypass because Codex can
+otherwise promote cached search to live search under full access. Hosted turns always use maximum
+bypass inside the disposable capsule, so Codex may promote cached search to live. Command network
+access follows the selected sandbox policy locally; hosted command isolation comes from the capsule.</p>
 <p>Declare any environment variables required by a custom provider's <code>env_key</code> or environment-based
 headers in the runtime's connections. A declared <code>OPENAI_API_KEY</code> remains available under that name
 for custom providers. Zeroshot also supplies <code>CODEX_API_KEY</code> for native OpenAI authentication when
