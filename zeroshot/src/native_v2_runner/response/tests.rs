@@ -16,7 +16,7 @@ fn worker_contract() -> NodeResponseContract {
 }
 
 #[test]
-fn verifier_guidance_is_runtime_owned_and_independent_of_authored_instructions() {
+fn workspace_and_verifier_guidance_are_runtime_owned() {
     let instructions = NodeInstructions::new("Assess a custom project's behavior.").assert_value();
     let input = json!({"task":"custom review"});
     let verifier = NodeResponseContract::Verifier {
@@ -24,13 +24,30 @@ fn verifier_guidance_is_runtime_owned_and_independent_of_authored_instructions()
         signals: BTreeMap::new(),
         diagnostic: PayloadType::Null,
     };
-    let prompt = render_agent_prompt(&instructions, &input, &verifier).assert_value();
+    let isolated = render_agent_prompt(&instructions, &input, &verifier).assert_value();
+    assert!(isolated.contains("Verify in this isolated checkout"));
+    assert!(isolated.contains("install manifest/lockfile dependencies in this checkout"));
+    assert!(isolated.contains("run setup and retry"));
+    assert!(!isolated.contains("local verifiers may run concurrently"));
+    let prompt =
+        render_agent_prompt_for(&instructions, &input, &verifier, VerifierWorkspace::Shared)
+            .assert_value();
     assert!(prompt.contains(instructions.as_str()));
-    assert!(prompt.contains("Do not modify source, tests, configuration"));
-    assert!(prompt.contains("temporary files and generated artifacts"));
+    assert!(!prompt.contains("Runtime-owned workspace setup guidance:"));
+    assert!(prompt.contains("Do not run setup or dependency-install commands"));
+    assert!(prompt.contains("local verifiers may run concurrently"));
+    assert!(prompt.contains("Do not modify reviewed material"));
+    assert!(prompt.contains("create artifacts"));
+    assert!(prompt.contains("missing declared dependency is a setup failure"));
+    assert!(prompt.contains("reject with evidence"));
     assert!(prompt.contains(&input.to_string()));
     assert!(prompt.contains(&serde_json::to_string(&verifier).assert_value()));
     let worker = render_agent_prompt(&instructions, &input, &worker_contract()).assert_value();
+    assert!(worker.contains("Runtime-owned workspace setup guidance:"));
+    assert!(worker.contains("manifest/lockfile dependencies in the checkout"));
+    assert!(worker.contains("Wait for setup to finish and check exit status"));
+    assert!(worker.contains("`$HOME/.local`, not"));
+    assert!(worker.contains("`/tmp` (possibly `noexec`)"));
     assert!(!worker.contains("Runtime-owned verifier guidance:"));
 }
 

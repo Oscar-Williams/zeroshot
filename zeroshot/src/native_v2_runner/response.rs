@@ -1,5 +1,4 @@
-use std::collections::BTreeMap;
-use std::fmt;
+use std::{collections::BTreeMap, fmt};
 
 use openengine_cluster_protocol::{
     EnumLabel, FieldName, NodeInstructions, NonEmptyEnumSet, PayloadType, WorkerOutcome,
@@ -8,6 +7,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
 use super::{DriverControl, LiveOutput, LiveOutputStream, NodeRunnerError};
+
+#[path = "response/guidance.rs"]
+mod guidance;
+pub(crate) use guidance::VerifierWorkspace;
 
 const MAX_RESPONSE_ERROR_BYTES: usize = 8 * 1024;
 const MAX_OUTPUT_CORRECTIONS: usize = 2;
@@ -442,29 +445,29 @@ fn closed_object_schema(properties: BTreeMap<String, Value>, required: Vec<Strin
     })
 }
 
-/// Renders the provider-neutral node turn contract used by every agent harness.
+/// Renders a provider-neutral node turn contract with isolated verifier guidance.
 pub fn render_agent_prompt(
     instructions: &NodeInstructions,
     input: &Value,
     response: &NodeResponseContract,
 ) -> Result<String, NodeRunnerError> {
-    let verifier_guidance = match response {
-        NodeResponseContract::Verifier { .. } => {
-            "Runtime-owned verifier guidance:\n\
-             Independently verify the work. Do not modify source, tests, configuration, or other \
-             material under review, and do not implement repairs. You may run checks and create \
-             their temporary files and generated artifacts. Report findings with evidence and \
-             describe failed or unavailable checks accurately.\n"
-        }
-        NodeResponseContract::Worker { .. } => "",
-    };
+    render_agent_prompt_for(instructions, input, response, VerifierWorkspace::Isolated)
+}
+
+pub(crate) fn render_agent_prompt_for(
+    instructions: &NodeInstructions,
+    input: &Value,
+    response: &NodeResponseContract,
+    verifier_workspace: VerifierWorkspace,
+) -> Result<String, NodeRunnerError> {
+    let runtime_guidance = guidance::runtime_guidance(response, verifier_workspace);
     let instructions = instructions.as_str();
     let input = serde_json::to_string(input).map_err(|_| NodeRunnerError::Driver)?;
     let response = serde_json::to_string(response).map_err(|_| NodeRunnerError::Driver)?;
     Ok(format!(
         "Execute this graph node using the shared workspace.\n\
          Authored instructions:\n{instructions}\n\
-         {verifier_guidance}\
+         {runtime_guidance}\
          Input JSON:\n{input}\n\
          Runtime-owned response contract:\n{response}\n\
          The response contract describes the required type; never return the contract itself. \
