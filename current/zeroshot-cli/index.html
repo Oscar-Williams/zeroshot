@@ -3266,23 +3266,27 @@ Regenerate it with <code>cargo run -p zeroshot --example generate_cli_docs -- --
 <a id="__codelineno-31-95" name="__codelineno-31-95" href="#__codelineno-31-95"></a>    claude/openrouter, claude/bedrock, codex/gateway, claude/gateway, and copilot/github. Gateway connections
 <a id="__codelineno-31-96" name="__codelineno-31-96" href="#__codelineno-31-96"></a>    require GATEWAY_BASE_URL and GATEWAY_API_KEY; Codex uses Responses and Claude uses Messages.
 <a id="__codelineno-31-97" name="__codelineno-31-97" href="#__codelineno-31-97"></a>    Known-incompatible harness/provider pairs include
-<a id="__codelineno-31-98" name="__codelineno-31-98" href="#__codelineno-31-98"></a>    codex/anthropic and claude/openai. Copilot uses a user-backed GitHub connection with
-<a id="__codelineno-31-99" name="__codelineno-31-99" href="#__codelineno-31-99"></a>    COPILOT_GITHUB_TOKEN. Model IDs are passed unchanged to the selected harness and
-<a id="__codelineno-31-100" name="__codelineno-31-100" href="#__codelineno-31-100"></a>    provider; Zeroshot does not maintain or validate provider model catalogs.
-<a id="__codelineno-31-101" name="__codelineno-31-101" href="#__codelineno-31-101"></a>
-<a id="__codelineno-31-102" name="__codelineno-31-102" href="#__codelineno-31-102"></a>    Sizes are small, medium, and large.
-<a id="__codelineno-31-103" name="__codelineno-31-103" href="#__codelineno-31-103"></a>
-<a id="__codelineno-31-104" name="__codelineno-31-104" href="#__codelineno-31-104"></a>    Every executable graph node needs a same-named binding. Agent bindings require kind and model.
-<a id="__codelineno-31-105" name="__codelineno-31-105" href="#__codelineno-31-105"></a>    Optional fields are effort (low, medium, high, xhigh, or max when supported), sessionScope
-<a id="__codelineno-31-106" name="__codelineno-31-106" href="#__codelineno-31-106"></a>    (execution or node_instance), and connections. Each connection key maps to the exact
-<a id="__codelineno-31-107" name="__codelineno-31-107" href="#__codelineno-31-107"></a>    environment variable names required by that node; never put values in this file.
-<a id="__codelineno-31-108" name="__codelineno-31-108" href="#__codelineno-31-108"></a>
-<a id="__codelineno-31-109" name="__codelineno-31-109" href="#__codelineno-31-109"></a>    Use `zeroshot template show TEMPLATE` to inspect node names. With --push, --pr, or --ship, omit the
-<a id="__codelineno-31-110" name="__codelineno-31-110" href="#__codelineno-31-110"></a>    template-owned delivery binding.
-<a id="__codelineno-31-111" name="__codelineno-31-111" href="#__codelineno-31-111"></a>
-<a id="__codelineno-31-112" name="__codelineno-31-112" href="#__codelineno-31-112"></a>    --uniform-runtime-config requires harness, provider, and model. It accepts optional size,
-<a id="__codelineno-31-113" name="__codelineno-31-113" href="#__codelineno-31-113"></a>    effort, sessionScope, and connections fields without nodes. Zeroshot expands that agent binding
-<a id="__codelineno-31-114" name="__codelineno-31-114" href="#__codelineno-31-114"></a>    across every executable graph node and supplies graph-visible Git delivery bindings itself.
+<a id="__codelineno-31-98" name="__codelineno-31-98" href="#__codelineno-31-98"></a>    codex/anthropic and claude/openai. Local Copilot reuses its native user login; contained
+<a id="__codelineno-31-99" name="__codelineno-31-99" href="#__codelineno-31-99"></a>    Copilot uses a user-backed GitHub connection with COPILOT_GITHUB_TOKEN. Model IDs are passed
+<a id="__codelineno-31-100" name="__codelineno-31-100" href="#__codelineno-31-100"></a>    unchanged to the selected harness and
+<a id="__codelineno-31-101" name="__codelineno-31-101" href="#__codelineno-31-101"></a>    provider; Zeroshot does not maintain or validate provider model catalogs.
+<a id="__codelineno-31-102" name="__codelineno-31-102" href="#__codelineno-31-102"></a>
+<a id="__codelineno-31-103" name="__codelineno-31-103" href="#__codelineno-31-103"></a>    Sizes are small, medium, and large.
+<a id="__codelineno-31-104" name="__codelineno-31-104" href="#__codelineno-31-104"></a>
+<a id="__codelineno-31-105" name="__codelineno-31-105" href="#__codelineno-31-105"></a>    Every executable graph node needs a same-named binding. Agent bindings require kind and model.
+<a id="__codelineno-31-106" name="__codelineno-31-106" href="#__codelineno-31-106"></a>    Optional fields are effort (low, medium, high, xhigh, or max when supported), sessionScope
+<a id="__codelineno-31-107" name="__codelineno-31-107" href="#__codelineno-31-107"></a>    (execution or node_instance), and connections. Each connection key maps to the exact
+<a id="__codelineno-31-108" name="__codelineno-31-108" href="#__codelineno-31-108"></a>    environment variable names required by that node; never put values in this file.
+<a id="__codelineno-31-109" name="__codelineno-31-109" href="#__codelineno-31-109"></a>
+<a id="__codelineno-31-110" name="__codelineno-31-110" href="#__codelineno-31-110"></a>    Use `zeroshot template show TEMPLATE` to inspect node names. With --push, --pr, or --ship, omit the
+<a id="__codelineno-31-111" name="__codelineno-31-111" href="#__codelineno-31-111"></a>    template-owned delivery binding.
+<a id="__codelineno-31-112" name="__codelineno-31-112" href="#__codelineno-31-112"></a>
+<a id="__codelineno-31-113" name="__codelineno-31-113" href="#__codelineno-31-113"></a>    --uniform-runtime-config requires harness, provider, and model. It accepts optional size,
+<a id="__codelineno-31-114" name="__codelineno-31-114" href="#__codelineno-31-114"></a>    effort, sessionScope, and connections fields without nodes. Zeroshot expands that agent binding
+<a id="__codelineno-31-115" name="__codelineno-31-115" href="#__codelineno-31-115"></a>    across every executable graph node and supplies graph-visible Git delivery bindings itself.
+<a id="__codelineno-31-116" name="__codelineno-31-116" href="#__codelineno-31-116"></a>    Omitted connections reuse native local login for codex/openai, claude/anthropic, and
+<a id="__codelineno-31-117" name="__codelineno-31-117" href="#__codelineno-31-117"></a>    copilot/github; other local lanes and contained targets derive their canonical connection
+<a id="__codelineno-31-118" name="__codelineno-31-118" href="#__codelineno-31-118"></a>    requirements.
 </code></pre></div>
 <h3 id="zeroshot-update"><code>zeroshot update</code><a class="headerlink" href="#zeroshot-update" title="Permanent link">&para;</a></h3>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-32-1" name="__codelineno-32-1" href="#__codelineno-32-1"></a>Update this executable and managed agent skill to the newest canonical release.

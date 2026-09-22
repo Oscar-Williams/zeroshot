@@ -1654,7 +1654,10 @@ runs again, such as across loop iterations.</p>
 </code></pre></div>
 <p>The submission environment or a target-owned connection store supplies the values. Zeroshot keeps
 them out of the graph, runtime JSON, run ledger, and observation records.</p>
-<p>The uniform runtime defaults are:</p>
+<p>When <code>connections</code> is omitted, Zeroshot materializes provider access for the selected execution
+placement. Local <code>codex</code>/<code>openai</code>, <code>claude</code>/<code>anthropic</code>, and <code>copilot</code>/<code>github</code> runs reuse the
+harness's native login and configuration without inventing a connection. A contained target, or
+any non-native provider lane, receives these canonical requirements:</p>
 <table>
 <thead>
 <tr>
@@ -1696,6 +1699,10 @@ them out of the graph, runtime JSON, run ledger, and observation records.</p>
 </tr>
 </tbody>
 </table>
+<p>Compatible authored connections take precedence, including <code>CODEX_API_KEY</code> for contained OpenAI
+access and Claude's supported auth-token variables for contained Anthropic access. Local profiles
+keep the authored runtime unchanged; applying one to a target derives the contained requirements at
+submission time. Profiles stored on a target derive those requirements when they are stored.</p>
 <p>Store a local static connection by prompting for its fields:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="go">zeroshot connection set openrouter --field OPENROUTER_API_KEY</span>
 <a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="go">zeroshot connection list</span>
