@@ -1635,34 +1635,35 @@ with an identifier accepted by the selected provider.</p>
 <a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="p">}</span>
 </code></pre></div>
 <p>Zeroshot passes model identifiers to the provider unchanged and does not keep its own model catalog.
-If <code>OPENAI_API_KEY</code> is absent from the environment, add the <code>openai</code> connection:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="go">zeroshot connection set openai --field OPENAI_API_KEY</span>
-</code></pre></div>
+For this local run, Zeroshot reuses the installed Codex CLI's login and provider configuration; no
+placeholder API key or <code>openai</code> connection is required. A Docker or cloud run instead derives the
+canonical <code>OPENAI_API_KEY</code> requirement and resolves it from the submission environment or the
+target's connection store because it cannot inherit host login state.</p>
 <h2 id="3-check-the-request-without-starting-it">3. Check the request without starting it<a class="headerlink" href="#3-check-the-request-without-starting-it" title="Permanent link">&para;</a></h2>
 <p><code>--validate-only</code> materializes the template and uniform runtime, then admits the request with its
 initial input. It does not contact a target or start a run.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="go">zeroshot run \</span>
-<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="go">  --title "Add JSON status output" \</span>
-<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="go">  --template software-change \</span>
-<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="go">  --input input.json \</span>
-<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="go">  --uniform-runtime-config runtime.json \</span>
-<a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a><span class="go">  --validate-only</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="go">zeroshot run \</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="go">  --title "Add JSON status output" \</span>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="go">  --template software-change \</span>
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="go">  --input input.json \</span>
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="go">  --uniform-runtime-config runtime.json \</span>
+<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="go">  --validate-only</span>
 </code></pre></div>
 <p>Successful validation writes <code>{"valid":true}</code>. A rejected request names the input, graph, or runtime
 problem; the selected target checks connection availability later, when it receives the submission.</p>
 <h2 id="4-start-the-run">4. Start the run<a class="headerlink" href="#4-start-the-run" title="Permanent link">&para;</a></h2>
 <p>Remove <code>--validate-only</code>:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="go">zeroshot run \</span>
-<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="go">  --title "Add JSON status output" \</span>
-<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="go">  --template software-change \</span>
-<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="go">  --input input.json \</span>
-<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="go">  --uniform-runtime-config runtime.json</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="go">zeroshot run \</span>
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="go">  --title "Add JSON status output" \</span>
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="go">  --template software-change \</span>
+<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="go">  --input input.json \</span>
+<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="go">  --uniform-runtime-config runtime.json</span>
 </code></pre></div>
 <p>The foreground command streams newline-delimited JSON while the run advances. Ctrl-C closes that
 stream without stopping the controller; another terminal can read the durable state:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="go">zeroshot list</span>
-<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="go">zeroshot status RUN_ID</span>
-<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="go">zeroshot logs RUN_ID</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="go">zeroshot list</span>
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="go">zeroshot status RUN_ID</span>
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="go">zeroshot logs RUN_ID</span>
 </code></pre></div>
 <p>For a graph view with node transcripts, open <a href="../install/#open-the-workspace-ui"><code>zeroshot ui</code></a>
 and select the run in <strong>Runs</strong>.</p>
@@ -1671,10 +1672,13 @@ and select the run in <strong>Runs</strong>.</p>
 terminal failure result.</p>
 <h2 id="try-the-smaller-template">Try the smaller template<a class="headerlink" href="#try-the-smaller-template" title="Permanent link">&para;</a></h2>
 <p><code>single-worker</code> has one agent node and no independent review loop:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="go">zeroshot template show single-worker</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="go">zeroshot template show single-worker</span>
 </code></pre></div>
 <p><code>zeroshot template show software-change</code> prints the exact graph behind the first example as the same
 <code>GraphSpec</code> accepted by <code>--graph</code> and the Python SDK.</p>
+<p><code>zeroshot template show auto-research</code> prints the fixed ten-iteration research graph. It keeps
+adopted, record-only, and aborted results under <code>.zeroshot/research</code>; add <code>--push</code> to a run when every
+finalized iteration should be published.</p>
 
 
 
