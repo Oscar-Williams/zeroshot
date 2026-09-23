@@ -8,6 +8,9 @@
 mod allocator;
 mod connections;
 mod repository;
+mod workspaces;
+
+pub use workspaces::{HostedWorkspace, HostedWorkspaceRequest, HostedWorkspaceStorage};
 
 #[cfg(test)]
 mod tests;
@@ -53,6 +56,7 @@ pub async fn build_production_target_authority(
 /// Host-owned non-secret capabilities used to compose one installed target.
 #[derive(Clone)]
 pub struct ProductionHostingConfig {
+    pub workspace_storage: Option<Arc<dyn HostedWorkspaceStorage>>,
     pub storage_root: PathBuf,
     pub copilot_executable: PathBuf,
     pub codex_executable: PathBuf,
@@ -104,6 +108,7 @@ impl ProductionTargetControllerFactory {
             SqliteRunLedger::open(ledger_path).map_err(|_| ProductionHostingError::Ledger)?,
         );
         let allocator = Arc::new(ProductionCapsuleAllocator::new(ProductionCapsuleConfig {
+            workspace_storage: self.config.workspace_storage.clone(),
             storage_root: root,
             copilot_executable: self.config.copilot_executable.clone(),
             codex_executable: self.config.codex_executable.clone(),
@@ -131,6 +136,10 @@ impl ProductionTargetControllerFactory {
 #[async_trait]
 impl TargetControllerFactory for ProductionTargetControllerFactory {
     fn supports_workspace_recovery(&self) -> bool {
+        true
+    }
+
+    fn supports_workspace_checkpoints(&self) -> bool {
         true
     }
 
@@ -306,6 +315,7 @@ fn set_traversable_directory(_path: &std::path::Path) -> Result<(), std::io::Err
 impl Default for ProductionHostingConfig {
     fn default() -> Self {
         Self {
+            workspace_storage: None,
             storage_root: PathBuf::from("/var/lib/zeroshot/native-v2"),
             copilot_executable: PathBuf::from("/usr/local/bin/copilot"),
             codex_executable: PathBuf::from("/usr/local/bin/codex"),

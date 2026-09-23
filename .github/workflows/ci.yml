@@ -151,6 +151,11 @@ jobs:
           toolchain: 1.97.0
           components: clippy,rustfmt
 
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: 1.27.1
+          cache: false
+
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           cache-on-failure: true
@@ -160,6 +165,36 @@ jobs:
           node-version: 24
           cache: npm
           cache-dependency-path: ui/package-lock.json
+
+      - name: Build pinned Restic sidecar for native tests
+        shell: bash
+        run: |
+          case "$RUNNER_OS" in
+            Linux)
+              target=x86_64-unknown-linux-musl
+              executable=restic
+              ;;
+            Windows)
+              target=x86_64-pc-windows-msvc
+              executable=restic.exe
+              ;;
+            *)
+              echo "unsupported native test runner: $RUNNER_OS" >&2
+              exit 2
+              ;;
+          esac
+          output_root="${RUNNER_TEMP//\\//}/zeroshot-restic"
+          scripts/distribution/build-restic.sh "$output_root" "$target"
+          restic_path="$output_root/$target/$executable"
+          "$restic_path" version
+          mkdir -p target/debug
+          cp "$restic_path" "target/debug/$executable"
+          chmod +x "target/debug/$executable"
+          restic_test_path="$(pwd)/target/debug/$executable"
+          if [[ "$RUNNER_OS" == Windows ]]; then
+            restic_test_path="$(cygpath -w "$restic_test_path")"
+          fi
+          printf 'ZEROSHOT_RESTIC_TEST=%s\n' "$restic_test_path" >> "$GITHUB_ENV"
 
       - name: Build and test embedded UI
         shell: bash
@@ -178,6 +213,14 @@ jobs:
           cargo check --locked --package zeroshot --lib --features workspace
           cargo clippy --package zeroshot --all-targets --features ui -- -D warnings
 
+      - name: Exercise Windows checkpoint storage before the full suite
+        if: runner.os == 'Windows'
+        shell: bash
+        run: >-
+          ZEROSHOT_RESTIC="$ZEROSHOT_RESTIC_TEST"
+          cargo test --package zeroshot --lib
+          native_v2_supervisor::checkpoints:: -- --nocapture
+
       - name: Run workspace tests
         if: runner.os != 'Windows'
         run: |
@@ -187,6 +230,13 @@ jobs:
       - name: Run Windows workspace tests
         if: runner.os == 'Windows'
         run: ./.github/scripts/test-windows-host.ps1
+
+      - name: Exercise real Restic checkpoint storage
+        shell: bash
+        run: >-
+          ZEROSHOT_RESTIC="$ZEROSHOT_RESTIC_TEST"
+          cargo test --package zeroshot --lib
+          native_v2_supervisor::checkpoints::tests::real_restic_deduplicates_incremental_stages_and_restores_the_latest_bytes
 
       - name: Test hosted process and filesystem boundaries as root
         if: runner.os == 'Linux'
@@ -293,6 +343,7 @@ jobs:
           ZEROSHOT_PYTHON_VERSION: 8.0.0.post1
           ZEROSHOT_PYTHON_WHEEL_PLATFORM: manylinux_2_17_x86_64
           ZEROSHOT_BINARY: /bin/true
+          ZEROSHOT_RESTIC_BINARY: /bin/true
         run: |
           python -m build --wheel --outdir dist/first
           python -m build --wheel --outdir dist/second
@@ -311,6 +362,7 @@ jobs:
           with zipfile.ZipFile(wheels[0]) as archive:
               names = set(archive.namelist())
           assert any(name.endswith('/zeroshot/_bin/zeroshot') for name in names), names
+          assert any(name.endswith('/zeroshot/_bin/restic') for name in names), names
           PY
 
   docs-check:
@@ -441,7 +493,8 @@ jobs:
   required:
     name: required
     if: always()
-    needs: [classify, tooling-check, npm-check, native-check, python-check, docs-check, target-image]
+    needs:
+      [classify, tooling-check, npm-check, native-check, python-check, docs-check, target-image]
     runs-on: ubuntu-latest
     steps:
       - name: Require every selected lane

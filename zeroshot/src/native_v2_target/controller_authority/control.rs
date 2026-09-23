@@ -4,8 +4,10 @@ use openengine_cluster_protocol::{
     ConnectionMutationResult, ConnectionSetRequest,
 };
 use openengine_cluster_protocol::{
-    RunForceParams, RunListParams, RunLogEventNotification, RunLogsParams, RunStatusParams,
-    RunSubmitResult, RunWatchParams,
+    RunCheckpointsParams, RunCheckpointsResult, RunDiscardWorkspaceParams,
+    RunDiscardWorkspaceResult, RunForceParams, RunListParams, RunLogEventNotification,
+    RunLogsParams, RunResumeParams, RunResumeResult, RunStatusParams, RunSubmitResult,
+    RunWatchParams,
 };
 use openengine_cluster_protocol::{RunProfile, RunProfileMutationResult, RunProfileRunRequest};
 use openengine_cluster_protocol::{
@@ -135,6 +137,16 @@ impl TargetControlAuthority for TargetHttpControlAuthority {
             .await
     }
 
+    async fn workspace_checkpoints_session(
+        &self,
+        target: &TargetRecord,
+        request: &openengine_cluster_protocol::TargetOecpSessionRequest,
+    ) -> Result<TargetOecpAccess, TargetAuthorityError> {
+        let controller_access = self.workspace_checkpoints_controller_access(target).await?;
+        self.issue_oecp_session(target, request, controller_access)
+            .await
+    }
+
     async fn connection_list(
         &self,
         target: &TargetRecord,
@@ -229,6 +241,30 @@ impl TargetControlAuthority for TargetHttpControlAuthority {
         plan_id: &openengine_cluster_protocol::MergePlanId,
     ) -> Result<openengine_cluster_protocol::MergePlan, TargetAuthorityError> {
         TargetHttpControlAuthority::merge_plan_force(self, target, plan_id).await
+    }
+
+    async fn hosted_run_resume(
+        &self,
+        target: &TargetRecord,
+        params: RunResumeParams,
+    ) -> Result<RunResumeResult, TargetAuthorityError> {
+        TargetHttpControlAuthority::hosted_run_resume(self, target, params).await
+    }
+
+    async fn hosted_run_checkpoints(
+        &self,
+        target: &TargetRecord,
+        params: RunCheckpointsParams,
+    ) -> Result<RunCheckpointsResult, TargetAuthorityError> {
+        TargetHttpControlAuthority::hosted_run_checkpoints(self, target, params).await
+    }
+
+    async fn hosted_run_discard_workspace(
+        &self,
+        target: &TargetRecord,
+        params: RunDiscardWorkspaceParams,
+    ) -> Result<RunDiscardWorkspaceResult, TargetAuthorityError> {
+        TargetHttpControlAuthority::hosted_run_discard_workspace(self, target, params).await
     }
 
     async fn hosted_run_list(

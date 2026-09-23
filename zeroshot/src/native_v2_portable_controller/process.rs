@@ -31,6 +31,8 @@ const READY_KIND: &str = "zeroshot.portable-controller-ready/v1";
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct PortableBootstrapDocument {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    checkpoint: Option<crate::native_v2_supervisor::checkpoints::CheckpointRestore>,
     run_id: RunId,
     delivery_run_id: RunId,
     adopt_existing_delivery: bool,
@@ -42,6 +44,7 @@ struct PortableBootstrapDocument {
     github_token: Option<String>,
     workspace: PathBuf,
     workspace_lease: PathBuf,
+    checkpoint_repository: PathBuf,
     storage: PathBuf,
     delivery_policy: DeliveryPolicy,
 }
@@ -50,9 +53,11 @@ impl PortableBootstrapDocument {
     fn validate(self) -> Result<PortableControllerBootstrap, PortableControllerError> {
         require_absolute(&self.workspace)?;
         require_absolute(&self.workspace_lease)?;
+        require_absolute(&self.checkpoint_repository)?;
         require_absolute(&self.storage)?;
         let environment = RunEnvironment::exact(&self.submission.runtime, self.connections)?;
         Ok(PortableControllerBootstrap {
+            checkpoint: self.checkpoint,
             run_id: self.run_id,
             delivery_run_id: self.delivery_run_id,
             adopt_existing_delivery: self.adopt_existing_delivery,
@@ -62,6 +67,7 @@ impl PortableBootstrapDocument {
             github_token: self.github_token,
             workspace: self.workspace,
             workspace_lease: self.workspace_lease,
+            checkpoint_repository: self.checkpoint_repository,
             storage: self.storage,
             delivery_policy: self.delivery_policy,
         })
@@ -171,11 +177,13 @@ fn encode_bootstrap(
 ) -> Result<Vec<u8>, PortableControllerError> {
     require_absolute(&bootstrap.workspace)?;
     require_absolute(&bootstrap.workspace_lease)?;
+    require_absolute(&bootstrap.checkpoint_repository)?;
     require_absolute(&bootstrap.storage)?;
     let environment = bootstrap
         .environment
         .for_runtime(&bootstrap.submission.runtime)?;
     let document = PortableBootstrapDocument {
+        checkpoint: bootstrap.checkpoint.clone(),
         run_id: bootstrap.run_id.clone(),
         delivery_run_id: bootstrap.delivery_run_id.clone(),
         adopt_existing_delivery: bootstrap.adopt_existing_delivery,
@@ -185,6 +193,7 @@ fn encode_bootstrap(
         github_token: bootstrap.github_token.clone(),
         workspace: bootstrap.workspace.clone(),
         workspace_lease: bootstrap.workspace_lease.clone(),
+        checkpoint_repository: bootstrap.checkpoint_repository.clone(),
         storage: bootstrap.storage.clone(),
         delivery_policy: bootstrap.delivery_policy,
     };

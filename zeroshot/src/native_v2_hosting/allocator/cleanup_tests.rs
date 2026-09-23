@@ -49,11 +49,14 @@ impl CleanupFixture {
         let (loss, _) = watch::channel(false);
         let run_id = RunId::new("delivery-lease-cleanup");
         let state = Arc::new(ProductionCapsuleState {
+            restored_delivery_run_id: OnceLock::new(),
             endpoint: OnceLock::from(Arc::new(NativeCapsuleNodeEndpoint::new(Arc::new(
                 IdleRunner,
             )))),
             run_root_identity: OnceLock::from(WorkspaceIdentity::capture(&run_root).assert_value()),
             run_root,
+            checkpoint_directory: directory.child("checkpoints"),
+            checkpoint_repository: directory.child("checkpoint-repository"),
             recovery_path: directory.child("recovery.json"),
             delivery_run_id: run_id.clone(),
             inherited_retained_workspace: false,

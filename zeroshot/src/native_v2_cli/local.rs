@@ -37,7 +37,8 @@ use crate::native_v2_cloud::submission_digest;
 use crate::native_v2_local::{PreparedLocalRun, prepare_local_run};
 use crate::native_v2_portable_controller::{
     ControllerLease, ControllerLeaseError, PortableControllerBootstrap, PortableControllerError,
-    PortableControllerPaths, PortableRunController, read_ready, write_bootstrap_file,
+    PortableControllerPaths, PortableControllerServer, PortableRunController, read_ready,
+    write_bootstrap_file,
 };
 use crate::native_v2_portable_controller::process::{PortableControllerTransport, connect_transport};
 use crate::v2_run_ledger::sqlite::SqliteRunLedger;
@@ -165,18 +166,15 @@ impl LocalCliBackend {
                 return Ok(transport);
             }
 
-            match PortableRunController::open_observer(paths.clone(), run_id.clone()).await {
-                Ok(observer) => {
-                    let observer = Arc::new(observer);
-                    let server = observer.bind().await.map_err(local_error)?;
+            match bind_observer(paths.clone(), run_id.clone()).await {
+                Ok(server) => {
                     tokio::spawn(async move {
                         let _ = server.serve().await;
                     });
-                    return connect_transport(&paths).await.map_err(local_error);
+                    // The observer owns the lease now; reconnect through the same bounded loop so
+                    // Windows does not fail the handoff on one unavailable named-pipe instance.
                 }
-                Err(PortableControllerError::Lease(ControllerLeaseError::Held))
-                    if Instant::now() < deadline =>
-                {
+                Err(error) if retryable_controller_handoff(&error) && Instant::now() < deadline => {
                     sleep(CONTROLLER_HANDOFF_RETRY_DELAY).await;
                 }
                 Err(error) => return Err(local_error(error)),
@@ -224,7 +222,7 @@ impl LocalCliBackend {
         &self,
         prepared: PreparedLocalRun,
     ) -> Result<RunId, NativeV2CliError> {
-        self.start_prepared_controller_with_lineage(prepared, None)
+        self.start_prepared_controller_with_lineage(prepared, None, None)
             .await
     }
 
@@ -232,6 +230,7 @@ impl LocalCliBackend {
         &self,
         prepared: PreparedLocalRun,
         resumed_from: Option<RunId>,
+        checkpoint: Option<crate::native_v2_supervisor::checkpoints::CheckpointRestore>,
     ) -> Result<RunId, NativeV2CliError> {
         let adopt_existing_delivery = resumed_from.is_some();
         let paths = self.paths(&prepared.run_id)?;
@@ -247,8 +246,10 @@ impl LocalCliBackend {
             },
         )?;
         let workspace_lease = self.workspace_lease(&prepared.workspace)?;
+        let checkpoint_repository = self.checkpoint_repository(&prepared.delivery_run_id)?;
         let bootstrap_path = storage.join(BOOTSTRAP_FILE);
         let bootstrap = PortableControllerBootstrap {
+            checkpoint,
             run_id: prepared.run_id.clone(),
             delivery_run_id: prepared.delivery_run_id,
             adopt_existing_delivery,
@@ -258,6 +259,7 @@ impl LocalCliBackend {
             github_token: prepared.github_token,
             workspace: prepared.workspace,
             workspace_lease,
+            checkpoint_repository,
             storage,
             delivery_policy: DeliveryPolicy::Optional,
         };
@@ -363,6 +365,17 @@ impl LocalCliBackend {
 
     fn workspace_lease(&self, workspace: &Path) -> Result<PathBuf, NativeV2CliError> {
         local_workspace_lease_path(&self.state_root, workspace)
+    }
+
+    fn checkpoint_repository(&self, delivery_run_id: &RunId) -> Result<PathBuf, NativeV2CliError> {
+        validate_local_run_id(delivery_run_id)?;
+        let mut digest = Sha256::new();
+        digest.update(b"zeroshot/native-v2/local-checkpoint-repository/v1\0");
+        digest.update(delivery_run_id.as_str().as_bytes());
+        Ok(self
+            .state_root
+            .join("checkpoint-repositories")
+            .join(format!("{:x}", digest.finalize())))
     }
 
     fn create_run_storage(
@@ -771,8 +784,11 @@ async fn wait_for_controller(
     loop {
         if let Ok(ready) = read_ready(paths) {
             if &ready.run_id == run_id {
-                connect_transport(paths).await.map_err(local_error)?;
-                return Ok(());
+                // Windows readiness can be visible while no named-pipe instance is currently
+                // available. Keep the connection in the existing bounded readiness loop.
+                if connect_transport(paths).await.is_ok() {
+                    return Ok(());
+                }
             }
         }
         if child.try_wait().map_err(local_io)?.is_some() {
@@ -785,6 +801,22 @@ async fn wait_for_controller(
         }
         sleep(Duration::from_millis(20)).await;
     }
+}
+
+async fn bind_observer(
+    paths: PortableControllerPaths,
+    run_id: RunId,
+) -> Result<PortableControllerServer, PortableControllerError> {
+    Arc::new(PortableRunController::open_observer(paths, run_id).await?)
+        .bind()
+        .await
+}
+
+fn retryable_controller_handoff(error: &PortableControllerError) -> bool {
+    matches!(
+        error,
+        PortableControllerError::Lease(ControllerLeaseError::Held) | PortableControllerError::Io(_)
+    )
 }
 
 fn require_local(target: Option<&str>) -> Result<(), NativeV2CliError> {

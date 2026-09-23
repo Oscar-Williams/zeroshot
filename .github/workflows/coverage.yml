@@ -45,6 +45,11 @@ jobs:
           toolchain: 1.97.0
           components: llvm-tools-preview
 
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: 1.27.1
+          cache: false
+
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           cache-on-failure: true
@@ -54,6 +59,16 @@ jobs:
           node-version: 24
           cache: npm
           cache-dependency-path: ui/package-lock.json
+
+      - name: Build pinned Restic sidecar for coverage
+        shell: bash
+        run: |
+          output_root="$RUNNER_TEMP/zeroshot-restic"
+          target=x86_64-unknown-linux-musl
+          scripts/distribution/build-restic.sh "$output_root" "$target"
+          restic_path="$output_root/$target/restic"
+          "$restic_path" version
+          printf 'ZEROSHOT_RESTIC=%s\n' "$restic_path" >> "$GITHUB_ENV"
 
       - name: Build embedded UI
         run: |
@@ -69,6 +84,9 @@ jobs:
       - name: Measure native coverage
         run: |
           cargo llvm-cov clean --workspace
+          mkdir -p target/llvm-cov-target/debug
+          cp "$ZEROSHOT_RESTIC" target/llvm-cov-target/debug/restic
+          chmod +x target/llvm-cov-target/debug/restic
           cargo llvm-cov --workspace --no-report
           cargo llvm-cov --package zeroshot --features ui --no-report
           cargo llvm-cov report --lcov --output-path lcov.info

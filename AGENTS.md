@@ -189,6 +189,31 @@ with `npm i -g @the-open-engine-company/zeroshot` or build `zeroshot` with Cargo
   attempt's delivery identity so every successor reuses the same delivery branch and pull request.
   Successor composition explicitly authorizes a fresh delivery adapter to adopt that lineage-owned
   branch; ordinary fresh adapters still reject unexplained existing run branches.
+- `openengine.workspace-checkpoints/v1` adds `run/checkpoints` and selected checkpoint resume to
+  retained workspace recovery. Default resume starts a fresh graph on the latest retained workspace;
+  checkpoint resume restores a private input snapshot and settled prerequisite executions. Neither
+  imports old provider sessions, secrets, or token usage. Checkpoint IDs never become filesystem paths.
+  The reducer owns boundaries: an outer parallel or mapped group is one unit across all nested work
+  and dispatch waves. The supervisor captures only after all live executions and cleanup have settled;
+  read-only boundaries reuse bytes. Local/direct storage normalizes Git into a temporary private
+  filesystem stage, commits it to one deduplicated Restic repository per recovery lineage, and then
+  removes the full stage. Small catalogs atomically map logical checkpoint IDs to Restic snapshots;
+  versioned execution seeds live in separate files and are read only for selected continuation.
+  Restart restores the latest published snapshot without importing a seed. Restore staging is a
+  private sibling of the workspace so final replacement stays on one filesystem. Successful
+  lineages delete their catalogs and repository only after durable terminal success; failed lineages
+  retain both for resume.
+  Hosted factories advertise checkpoints only when they implement storage and restore. Snapshot
+  restore requires exclusive workspace ownership and preserves the checkout root and Git identity.
+- Hosted workspace recovery advertises `resume`, `checkpoints`, and `discard_workspace` in the
+  separate `openengine.hosted-workspace-recovery/v1` outer discovery extension, leaving the strict
+  `zeroshot.hosted-runs/v1` route object unchanged for older clients. POST bodies and results match
+  the OECP `Run*Params`/`Run*Result` types. These authenticated Cloud routes remain available after
+  capsule disposal. Cloud resolves the admitted connection references freshly; hosted recovery does
+  not depend on local direct-target authorization or read local provider environment values.
+  `ProductionHostingConfig` can accept host-owned `HostedWorkspaceStorage`; the allocator invokes
+  it after source checkout and before provider dispatch, imports settled prerequisites, and
+  preserves supplied delivery lineage. Public clients never supply storage paths or execution seeds.
 - Durable observation replay reads bounded ledger pages and retains its scan cursor across pages.
   A finished snapshot closes a subscription only after replay reaches its durable cursor.
 - Bulk replay uses the WebSocket client's opt-in subscription backpressure on a dedicated
@@ -215,8 +240,9 @@ with `npm i -g @the-open-engine-company/zeroshot` or build `zeroshot` with Cargo
 - Hosted source checkout retries only its fresh platform-owned staging workspace, within one
   allocation and one total deadline. Preserve the exact admitted revision before starting any
   graph node; terminal Git details remain redacted and private operator diagnostics.
-- Contained provider sessions bound post-exit I/O draining by any explicit command deadline and a ten-minute
-  ceiling while still observing cancellation and cleanup.
+- Contained provider sessions clean up surviving descendants immediately after the main process exits,
+  before draining inherited output streams. Buffered output still drains under any explicit command
+  deadline and a ten-minute ceiling while observing cancellation; cleanup stays scoped to its session.
 - Git delivery owns authenticated repository operations and observes the run PR and branch before
   staging. It pushes the captured candidate SHA, preserves published ancestry and local work, and
   recognizes confirmed remote success after a lost response. Authorized branch updates may advance

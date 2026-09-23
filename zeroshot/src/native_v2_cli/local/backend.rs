@@ -24,6 +24,27 @@ impl LocalCliBackend {
         self.start_local_successor(params, recovery).await
     }
 
+    fn checkpoint_selection(
+        &self,
+        params: &openengine_cluster_protocol::RunResumeParams,
+    ) -> Result<Option<crate::native_v2_supervisor::checkpoints::CheckpointRestore>, NativeV2CliError>
+    {
+        use crate::native_v2_supervisor::checkpoints::{
+            CheckpointRestore, CheckpointRestoreSelection, latest_available, restore_selection,
+        };
+        let directory = self.paths(&params.run_id)?.storage().join("checkpoints");
+        let selection = restore_selection(params.from.as_ref());
+        if matches!(&selection, CheckpointRestoreSelection::Latest)
+            && !latest_available(&directory).map_err(local_error)?
+        {
+            return Ok(None);
+        }
+        Ok(Some(CheckpointRestore {
+            directory,
+            selection,
+        }))
+    }
+
     async fn start_local_successor(
         &self,
         params: openengine_cluster_protocol::RunResumeParams,
@@ -34,6 +55,7 @@ impl LocalCliBackend {
             .bootstrap_values();
         let environment = RunEnvironment::exact(&recovery.submission.runtime, connections)
             .map_err(local_error)?;
+        let checkpoint = self.checkpoint_selection(&params)?;
         recovery.successor_run_id = Some(params.successor_run_id.clone());
         self.write_recovery_document(&params.run_id, &recovery)?;
         let prepared = PreparedLocalRun {
@@ -49,7 +71,11 @@ impl LocalCliBackend {
             .map_err(local_error)?,
         };
         if let Err(error) = self
-            .start_prepared_controller_with_lineage(prepared, Some(params.run_id.clone()))
+            .start_prepared_controller_with_lineage(
+                prepared,
+                Some(params.run_id.clone()),
+                checkpoint,
+            )
             .await
         {
             self.reconcile_local_resume_claim(&params.run_id).await?;
@@ -221,6 +247,23 @@ impl NativeV2CliBackend for LocalCliBackend {
         self.force_local(params).await.map(Into::into)
     }
 
+    async fn run_checkpoints(
+        &self,
+        target: Option<&str>,
+        params: openengine_cluster_protocol::RunCheckpointsParams,
+    ) -> Result<openengine_cluster_protocol::RunCheckpointsResult, NativeV2CliError> {
+        require_local(target)?;
+        self.status_local(RunStatusParams {
+            run_id: params.run_id.clone(),
+        })
+        .await?;
+        crate::native_v2_supervisor::checkpoints::list(
+            &self.paths(&params.run_id)?.storage().join("checkpoints"),
+            params,
+        )
+        .map_err(local_error)
+    }
+
     async fn run_resume(
         &self,
         target: Option<&str>,
@@ -239,5 +282,55 @@ impl NativeV2CliBackend for LocalCliBackend {
         Err(local_message(
             "local workspaces are user-owned and cannot be discarded by Zeroshot",
         ))
+    }
+}
+
+#[cfg(test)]
+mod checkpoint_compatibility_tests {
+    use super::*;
+    use crate::native_v2_candidate::test_support::TestDirectory;
+    use crate::native_v2_supervisor::checkpoints::CheckpointRestoreSelection;
+    use openengine_cluster_testkit::assertions::AssertValue;
+    use openengine_cluster_protocol::{CheckpointId, RunResumeFrom};
+
+    fn params(from: Option<RunResumeFrom>) -> openengine_cluster_protocol::RunResumeParams {
+        openengine_cluster_protocol::RunResumeParams {
+            run_id: RunId::new("0199f33f-3b44-7d21-9000-000000000001"),
+            successor_run_id: RunId::new("0199f33f-3b44-7d21-9000-000000000002"),
+            from,
+            connections: Default::default(),
+            connection_resolver: None,
+            github_token: None,
+        }
+    }
+
+    #[test]
+    fn legacy_resume_uses_the_retained_workspace_but_checkpoint_selection_stays_strict() {
+        let root = TestDirectory::new("llr");
+        let backend = LocalCliBackend::new(
+            root.path().to_owned(),
+            PathBuf::from("zeroshot"),
+            root.path().to_owned(),
+            PathBuf::from("git"),
+        );
+
+        for from in [None, Some(RunResumeFrom::Restart {})] {
+            assert!(
+                backend
+                    .checkpoint_selection(&params(from))
+                    .assert_value()
+                    .is_none()
+            );
+        }
+        let selected = backend
+            .checkpoint_selection(&params(Some(RunResumeFrom::Checkpoint {
+                checkpoint_id: CheckpointId::new("entry-1").assert_value(),
+            })))
+            .assert_value()
+            .assert_value();
+        assert!(matches!(
+            selected.selection,
+            CheckpointRestoreSelection::Checkpoint { .. }
+        ));
     }
 }

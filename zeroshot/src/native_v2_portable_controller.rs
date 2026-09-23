@@ -97,6 +97,7 @@ impl PortableControllerPaths {
 }
 
 pub struct PortableControllerBootstrap {
+    pub checkpoint: Option<crate::native_v2_supervisor::checkpoints::CheckpointRestore>,
     pub run_id: RunId,
     pub delivery_run_id: RunId,
     pub adopt_existing_delivery: bool,
@@ -106,6 +107,7 @@ pub struct PortableControllerBootstrap {
     pub github_token: Option<String>,
     pub workspace: PathBuf,
     pub workspace_lease: PathBuf,
+    pub checkpoint_repository: PathBuf,
     pub storage: PathBuf,
     pub delivery_policy: DeliveryPolicy,
 }
@@ -125,6 +127,7 @@ impl fmt::Debug for PortableControllerBootstrap {
             )
             .field("workspace", &self.workspace)
             .field("workspace_lease", &self.workspace_lease)
+            .field("checkpoint_repository", &self.checkpoint_repository)
             .field("storage", &self.storage)
             .field("delivery_policy", &self.delivery_policy)
             .finish()

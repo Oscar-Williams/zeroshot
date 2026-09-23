@@ -31,7 +31,9 @@ mod contained;
 mod filesystem;
 
 pub(crate) use contained::ProviderProcess;
-pub(crate) use filesystem::{ProviderExecution, ProviderExecutionFiles, ProviderFilesystemConfig};
+pub(crate) use filesystem::{
+    ProviderExecution, ProviderExecutionFiles, ProviderFilesystemConfig, copy_workspace_entry,
+};
 
 const CONTINUE_PROMPT: &str = "Continue";
 

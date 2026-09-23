@@ -101,6 +101,15 @@ pub trait TargetConnector: Send + Sync {
         name: &str,
         run_id: Option<openengine_cluster_protocol::RunId>,
     ) -> Result<Arc<Self::Transport>, NativeV2CliError>;
+    async fn connect_workspace_checkpoints(
+        &self,
+        _name: &str,
+        _run_id: openengine_cluster_protocol::RunId,
+    ) -> Result<Arc<Self::Transport>, NativeV2CliError> {
+        Err(NativeV2CliError::Target(
+            "target does not advertise workspace checkpoints".to_owned(),
+        ))
+    }
     async fn connect_workspace_recovery(
         &self,
         _name: &str,
@@ -137,6 +146,28 @@ pub trait TargetConnector: Send + Sync {
         Err(NativeV2CliError::Target(
             "local authorization for workspace recovery is unavailable".to_owned(),
         ))
+    }
+    async fn hosted_run_resume(
+        &self,
+        _name: &str,
+        _params: openengine_cluster_protocol::RunResumeParams,
+    ) -> Result<Option<openengine_cluster_protocol::RunResumeResult>, NativeV2CliError> {
+        Ok(None)
+    }
+    async fn hosted_run_checkpoints(
+        &self,
+        _name: &str,
+        _params: openengine_cluster_protocol::RunCheckpointsParams,
+    ) -> Result<Option<openengine_cluster_protocol::RunCheckpointsResult>, NativeV2CliError> {
+        Ok(None)
+    }
+    async fn hosted_run_discard_workspace(
+        &self,
+        _name: &str,
+        _params: openengine_cluster_protocol::RunDiscardWorkspaceParams,
+    ) -> Result<Option<openengine_cluster_protocol::RunDiscardWorkspaceResult>, NativeV2CliError>
+    {
+        Ok(None)
     }
     async fn hosted_run_list(
         &self,

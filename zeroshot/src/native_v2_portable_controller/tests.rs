@@ -15,12 +15,15 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 use super::*;
+use super::controller::PortableCheckpointCleanup;
 use crate::native_v2_candidate::test_support::{full_graph, success_node};
+use crate::native_v2_cloud::CapsuleCleanup;
 use crate::native_v2_contract::{
     CodexProvider, RunSize, RunSubmission, RunTitle, RuntimePlan, SourceBranchId,
     SourceRepositoryId, SourceRevisionId, ResolvedSource,
 };
 use crate::native_v2_runner::{NodeHandle, NodeRunRequest, NodeRunnerError};
+use crate::native_v2_supervisor::RunRuntimeExit;
 use crate::v2_run_ledger::{CreateRun, CreateRunOutcome, RunLedger};
 
 static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(1);
@@ -61,6 +64,41 @@ impl NodeRunner for NeverDispatched {
     async fn close_run(&self, _run_id: &RunId) {}
 }
 
+#[tokio::test]
+async fn runtime_cleanup_preserves_checkpoint_bytes_until_terminal_policy_runs() {
+    for exit in [
+        RunRuntimeExit::Completed,
+        RunRuntimeExit::Failed,
+        RunRuntimeExit::ForceStopped,
+        RunRuntimeExit::RuntimeLost,
+    ] {
+        let root = TestDirectory::new("checkpoint-retention");
+        let directory = root.child("catalog");
+        let repository = root.child("repository");
+        std::fs::create_dir(&directory).assert_value();
+        std::fs::create_dir(&repository).assert_value();
+        std::fs::create_dir_all(directory.join("staging/incomplete")).assert_value();
+        std::fs::write(directory.join("point"), "catalog").assert_value();
+        std::fs::write(directory.join("staging/incomplete/tree"), "temporary").assert_value();
+        std::fs::write(repository.join("pack"), "bytes").assert_value();
+        let cleanup = PortableCheckpointCleanup {
+            inner: Arc::new(super::engine::ConfirmedCleanup),
+            directory: directory.clone(),
+            repository: repository.clone(),
+        };
+
+        cleanup.destroy_or_confirm_absent(exit).await.assert_value();
+
+        let retained = matches!(
+            exit,
+            RunRuntimeExit::Completed | RunRuntimeExit::Failed | RunRuntimeExit::RuntimeLost
+        );
+        assert_eq!(directory.exists(), retained);
+        assert_eq!(repository.exists(), retained);
+        assert!(!directory.join("staging").exists());
+    }
+}
+
 fn submission(key: &str) -> RunSubmission {
     RunSubmission {
         title: RunTitle::new("Portable controller test").assert_value_with("title"),
@@ -91,6 +129,7 @@ fn bootstrap(
     let environment = RunEnvironment::exact(&submission.runtime, BTreeMap::new())
         .assert_value_with("exact empty environment");
     PortableControllerBootstrap {
+        checkpoint: None,
         delivery_run_id: run_id.clone(),
         adopt_existing_delivery: false,
         run_id,
@@ -100,6 +139,7 @@ fn bootstrap(
         github_token: None,
         workspace,
         workspace_lease: storage.join("workspace.lock"),
+        checkpoint_repository: storage.join("checkpoint-repository"),
         storage,
         delivery_policy: DeliveryPolicy::Optional,
     }
@@ -136,6 +176,7 @@ async fn one_run_server_is_ready_reconnectable_and_rejects_external_submission()
     let workspace = root.child("workspace");
     let storage = root.child("state");
     std::fs::create_dir(&workspace).assert_value_with("workspace");
+    std::fs::write(workspace.join("user.txt"), "keep local workspace").assert_value();
     let run_id = RunId::new("run-portable-server");
     let submitted = submission("portable-server");
     let controller = Arc::new(
@@ -194,6 +235,13 @@ async fn one_run_server_is_ready_reconnectable_and_rejects_external_submission()
             TerminalResult::Succeeded { .. }
         ));
     }
+
+    assert!(!storage.join("checkpoints").exists());
+    assert!(!storage.join("checkpoint-repository").exists());
+    assert_eq!(
+        std::fs::read_to_string(root.child("workspace").join("user.txt")).assert_value(),
+        "keep local workspace"
+    );
 
     let second_transport = connect_transport(controller.paths())
         .await
@@ -285,12 +333,22 @@ async fn observer_reconciles_process_loss_without_constructing_or_dispatching_a_
         .assert_value_with("seed nonterminal run");
     assert!(matches!(created, CreateRunOutcome::Created(_)));
     drop(ledger);
+    std::fs::create_dir_all(paths.storage().join("checkpoints/staging/incomplete"))
+        .assert_value_with("create interrupted checkpoint stage");
+    std::fs::write(
+        paths
+            .storage()
+            .join("checkpoints/staging/incomplete/workspace"),
+        "temporary full copy",
+    )
+    .assert_value_with("write interrupted checkpoint stage");
 
     let controller = Arc::new(
         PortableRunController::open_observer(paths.clone(), run_id.clone())
             .await
             .assert_value_with("open dead controller observer"),
     );
+    assert!(!paths.storage().join("checkpoints/staging").exists());
     assert!(matches!(
         ControllerLease::acquire(paths.lease()),
         Err(ControllerLeaseError::Held)

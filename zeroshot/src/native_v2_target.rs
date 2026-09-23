@@ -135,9 +135,11 @@ pub struct NativeV2TargetConnector<R, A, D> {
     dialer: D,
 }
 
+#[derive(Clone, Copy)]
 enum TargetSessionPurpose {
     General,
     WorkspaceRecovery,
+    WorkspaceCheckpoints,
 }
 
 impl<R, A, D> NativeV2TargetConnector<R, A, D> {
@@ -414,13 +416,30 @@ where
             .await
     }
 
+    async fn connect_workspace_checkpoints(
+        &self,
+        name: &str,
+        run_id: openengine_cluster_protocol::RunId,
+    ) -> Result<Arc<Self::Transport>, NativeV2CliError> {
+        self.connect_session(
+            name,
+            Some(run_id),
+            TargetSessionPurpose::WorkspaceCheckpoints,
+        )
+        .await
+    }
+
     fn authorize_workspace_recovery_requirements(
         &self,
         name: &str,
         run_id: &openengine_cluster_protocol::RunId,
         requirements: RunConnectionRequirements,
     ) -> Result<RunConnectionRequirements, NativeV2CliError> {
-        let target = self.direct_recovery_target(name)?;
+        let target = self.target(name)?;
+        if !matches!(target.access, TargetAccess::Direct) {
+            // Cloud resolves the admitted connection references with fresh hosted credentials.
+            return Ok(RunConnectionRequirements::new());
+        }
         let trusted = self
             .registry
             .recovery_authorization(&target.id, run_id)
@@ -460,10 +479,62 @@ where
         name: &str,
         run_id: &openengine_cluster_protocol::RunId,
     ) -> Result<(), NativeV2CliError> {
-        let target = self.direct_recovery_target(name)?;
+        let target = self.target(name)?;
+        if !matches!(target.access, TargetAccess::Direct) {
+            return Ok(());
+        }
         self.registry
             .remove_recovery_authorization(&target.id, run_id)
             .map_err(cli_target_error)
+    }
+
+    async fn hosted_run_resume(
+        &self,
+        name: &str,
+        params: openengine_cluster_protocol::RunResumeParams,
+    ) -> Result<Option<openengine_cluster_protocol::RunResumeResult>, NativeV2CliError> {
+        let target = self.target(name)?;
+        if matches!(target.access, TargetAccess::Direct) {
+            return Ok(None);
+        }
+        self.authority
+            .hosted_run_resume(&target, params)
+            .await
+            .map_err(|error| error.into_cli(&target))
+            .map(Some)
+    }
+
+    async fn hosted_run_checkpoints(
+        &self,
+        name: &str,
+        params: openengine_cluster_protocol::RunCheckpointsParams,
+    ) -> Result<Option<openengine_cluster_protocol::RunCheckpointsResult>, NativeV2CliError> {
+        let target = self.target(name)?;
+        if matches!(target.access, TargetAccess::Direct) {
+            return Ok(None);
+        }
+        self.authority
+            .hosted_run_checkpoints(&target, params)
+            .await
+            .map_err(|error| error.into_cli(&target))
+            .map(Some)
+    }
+
+    async fn hosted_run_discard_workspace(
+        &self,
+        name: &str,
+        params: openengine_cluster_protocol::RunDiscardWorkspaceParams,
+    ) -> Result<Option<openengine_cluster_protocol::RunDiscardWorkspaceResult>, NativeV2CliError>
+    {
+        let target = self.target(name)?;
+        if matches!(target.access, TargetAccess::Direct) {
+            return Ok(None);
+        }
+        self.authority
+            .hosted_run_discard_workspace(&target, params)
+            .await
+            .map_err(|error| error.into_cli(&target))
+            .map(Some)
     }
 
     async fn hosted_run_list(
@@ -567,6 +638,11 @@ where
             TargetSessionPurpose::WorkspaceRecovery => {
                 self.authority
                     .workspace_recovery_session(&target, &request)
+                    .await
+            }
+            TargetSessionPurpose::WorkspaceCheckpoints => {
+                self.authority
+                    .workspace_checkpoints_session(&target, &request)
                     .await
             }
         }

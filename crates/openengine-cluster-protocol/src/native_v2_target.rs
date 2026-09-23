@@ -375,6 +375,23 @@ pub struct TargetHostedRunsDiscovery {
     pub route_templates: TargetHostedRunRoutes,
 }
 
+pub const HOSTED_WORKSPACE_RECOVERY_KIND: &str = "openengine.hosted-workspace-recovery/v1";
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct TargetHostedWorkspaceRecoveryRoutes {
+    pub resume: String,
+    pub checkpoints: String,
+    pub discard_workspace: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct TargetHostedWorkspaceRecoveryDiscovery {
+    pub kind: String,
+    pub route_templates: TargetHostedWorkspaceRecoveryRoutes,
+}
+
 /// Read-only routes for the bounded native run-history projection.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -412,6 +429,14 @@ pub struct TargetConnectionsDiscovery {
     pub dynamic_kinds: Vec<String>,
 }
 
+pub const WORKSPACE_CHECKPOINTS_KIND: &str = "openengine.workspace-checkpoints/v1";
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct TargetWorkspaceCheckpointsDiscovery {
+    pub kind: String,
+}
+
 pub const WORKSPACE_RECOVERY_KIND: &str = "openengine.workspace-recovery/v1";
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -435,6 +460,10 @@ pub struct TargetDiscoveryExtensions {
     pub run_profiles: Option<TargetRunProfilesDiscovery>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub workspace_recovery: Option<TargetWorkspaceRecoveryDiscovery>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub workspace_checkpoints: Option<TargetWorkspaceCheckpointsDiscovery>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hosted_workspace_recovery: Option<TargetHostedWorkspaceRecoveryDiscovery>,
 }
 
 /// One discovery document for direct Docker targets and OAuth-hosted targets.
@@ -466,6 +495,8 @@ impl TargetDiscoveryExtensions {
             && self.connections.is_none()
             && self.run_profiles.is_none()
             && self.workspace_recovery.is_none()
+            && self.workspace_checkpoints.is_none()
+            && self.hosted_workspace_recovery.is_none()
     }
 }
 
@@ -488,6 +519,17 @@ impl TargetDiscoveryDocument {
             login_session: None,
             extensions: TargetDiscoveryExtensions::default(),
         }
+    }
+
+    /// Adds checkpoint listing and entry-point resume support for direct and private targets.
+    #[must_use]
+    pub fn with_workspace_checkpoints(mut self) -> Self {
+        if !matches!(self.authentication, TargetAuthentication::HostedOauth) {
+            self.extensions.workspace_checkpoints = Some(TargetWorkspaceCheckpointsDiscovery {
+                kind: WORKSPACE_CHECKPOINTS_KIND.to_owned(),
+            });
+        }
+        self
     }
 
     /// Adds the recovery extension to direct and private-capability discovery.
