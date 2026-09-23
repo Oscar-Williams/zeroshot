@@ -1603,8 +1603,8 @@
 <td><code>vX.Y.Z</code></td>
 </tr>
 <tr>
-<td>Executable</td>
-<td><code>zeroshot</code> (<code>zeroshot.exe</code> on Windows)</td>
+<td>Executables</td>
+<td><code>zeroshot</code> and <code>restic</code> (<code>.exe</code> on Windows)</td>
 </tr>
 <tr>
 <td>Native archives</td>
@@ -1652,9 +1652,10 @@ the package.</p>
 <h2 id="targets">Targets<a class="headerlink" href="#targets" title="Permanent link">&para;</a></h2>
 <p>The target manifest declares Linux x64/arm64 musl, macOS x64/arm64, and Windows x64, and the npm
 target table must match it exactly. The installer stops on any other host.</p>
-<p>Every archive contains one executable. <code>SHA256SUMS</code> covers each archive and the exact
-<code>zeroshot-skill.md</code> copied from the npm package's canonical skill. The workflow also rejects a Linux
-release binary that has a dynamic interpreter.</p>
+<p>Every archive contains exactly the Zeroshot executable and its pinned Restic sidecar. npm, Python
+wheels, self-update, and the target image install the pair together. <code>SHA256SUMS</code> covers each archive
+and the exact <code>zeroshot-skill.md</code> copied from the npm package's canonical skill. The workflow also
+rejects a Linux Zeroshot release binary that has a dynamic interpreter.</p>
 <h2 id="version-staging">Version staging<a class="headerlink" href="#version-staging" title="Permanent link">&para;</a></h2>
 <p>Checked-in manifests carry development versions that are not release identifiers. In the release
 workspace, <code>scripts/distribution.js stage-version</code> updates <code>zeroshot/Cargo.toml</code> and <code>Cargo.lock</code>,

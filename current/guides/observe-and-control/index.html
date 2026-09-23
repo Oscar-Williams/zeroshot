@@ -744,6 +744,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#restart-or-resume-a-failed-run" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Restart or resume a failed run
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#stop-only-with-explicit-intent" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1602,6 +1613,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#restart-or-resume-a-failed-run" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Restart or resume a failed run
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#stop-only-with-explicit-intent" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1676,9 +1698,36 @@ durable replay preserves it.</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="go">zeroshot attach RUN_ID EXECUTION_REF</span>
 </code></pre></div>
 <p>Closing the attachment stream does not cancel the execution.</p>
+<h2 id="restart-or-resume-a-failed-run">Restart or resume a failed run<a class="headerlink" href="#restart-or-resume-a-failed-run" title="Permanent link">&para;</a></h2>
+<p>Failed local runs and direct targets retain their workspace. Restart the original graph using its
+latest files with:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="go">zeroshot resume RUN_ID</span>
+</code></pre></div>
+<p>To resume at an earlier node, list its available input checkpoints and select one:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="go">zeroshot checkpoints RUN_ID</span>
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="go">zeroshot resume RUN_ID --from-checkpoint CHECKPOINT_ID</span>
+</code></pre></div>
+<p>Add <code>--target NAME</code> to both commands for a named target. Checkpoint listings are paginated; use
+<code>--after CHECKPOINT_ID</code> with the returned <code>nextAfter</code> value to fetch the next page.</p>
+<p>A selected checkpoint restores the files from immediately before its node and the completed
+prerequisite outputs. The selected node runs again. Parallel and mapped groups have one checkpoint
+for the whole outer group, including nested groups and all mapped batches; individual concurrent
+writers do not have separate snapshots. Read-only boundaries can share the same workspace bytes.</p>
+<p>Both modes create a new run ID, keep the original graph, input, source, and delivery lineage, and
+resolve fresh credentials. Provider sessions and previous token usage are not carried into the new
+attempt. Selecting a checkpoint replaces later workspace edits, including untracked and ignored
+files. Restart restores the latest completed snapshot and starts the graph at its root. A sudden
+target loss can precede the next snapshot boundary, so the last writer may run again. Local
+workspaces must be idle while they are restored.</p>
+<p>Local and Docker targets deduplicate checkpoints in a private Restic repository beside their run
+storage and advertise <code>openengine.workspace-checkpoints/v1</code>. They retain that repository only for a
+failed recovery lineage and delete it after a successful run. Cloud exposes recovery through
+authenticated hosted run routes, so failed-run checkpoints remain available for 30 days after the
+original capsule is removed. Cloud resolves fresh credentials from the admitted connection
+references when it starts the successor.</p>
 <h2 id="stop-only-with-explicit-intent">Stop only with explicit intent<a class="headerlink" href="#stop-only-with-explicit-intent" title="Permanent link">&para;</a></h2>
 <p><code>force-stop</code> is the destructive run-lifetime command:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="go">zeroshot force-stop RUN_ID</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="go">zeroshot force-stop RUN_ID</span>
 </code></pre></div>
 <p>The command asks the controller to stop active work and writes the resulting status as JSON. Read
 status first if another operator may already have stopped the run, or if it may have completed.</p>
