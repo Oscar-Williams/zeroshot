@@ -2574,7 +2574,7 @@ Regenerate it with <code>cargo run -p zeroshot --example generate_cli_docs -- --
 <h3 id="zeroshot-ui"><code>zeroshot ui</code><a class="headerlink" href="#zeroshot-ui" title="Permanent link">&para;</a></h3>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>Serve the local profile editor and live or recorded run history.
 <a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>
-<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>Open the printed /ui/ URL. Uses the CLI's saved profiles and local run history. Ctrl-C stops the UI server; active runs continue.
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>Open the printed /ui/ URL. Profiles always use the CLI's local store. Run history uses the local controller unless --target selects a configured target. Ctrl-C stops the UI server; active runs continue.
 <a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>
 <a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a>Usage: zeroshot ui [OPTIONS]
 <a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a>
@@ -2584,8 +2584,11 @@ Regenerate it with <code>cargo run -p zeroshot --example generate_cli_docs -- --
 <a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a>
 <a id="__codelineno-2-11" name="__codelineno-2-11" href="#__codelineno-2-11"></a>          [default: 127.0.0.1:4173]
 <a id="__codelineno-2-12" name="__codelineno-2-12" href="#__codelineno-2-12"></a>
-<a id="__codelineno-2-13" name="__codelineno-2-13" href="#__codelineno-2-13"></a>  -h, --help
-<a id="__codelineno-2-14" name="__codelineno-2-14" href="#__codelineno-2-14"></a>          Print help (see a summary with '-h')
+<a id="__codelineno-2-13" name="__codelineno-2-13" href="#__codelineno-2-13"></a>      --target &lt;NAME&gt;
+<a id="__codelineno-2-14" name="__codelineno-2-14" href="#__codelineno-2-14"></a>          Read run history from this configured target. Profiles remain local
+<a id="__codelineno-2-15" name="__codelineno-2-15" href="#__codelineno-2-15"></a>
+<a id="__codelineno-2-16" name="__codelineno-2-16" href="#__codelineno-2-16"></a>  -h, --help
+<a id="__codelineno-2-17" name="__codelineno-2-17" href="#__codelineno-2-17"></a>          Print help (see a summary with '-h')
 </code></pre></div>
 <h3 id="zeroshot-target"><code>zeroshot target</code><a class="headerlink" href="#zeroshot-target" title="Permanent link">&para;</a></h3>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>Manage named targets or serve a direct target.

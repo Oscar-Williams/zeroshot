@@ -1651,19 +1651,23 @@ Zeroshot does not install the sandbox.</p>
 <p>Open <code>http://127.0.0.1:4173/ui/</code> to edit profiles and inspect live or completed local runs.
 Use <code>--listen 127.0.0.1:4185</code> to choose another loopback port. Ctrl-C stops the UI server;
 active runs continue. Restart the command to reconnect.</p>
+<p>To inspect runs on a configured target while keeping profiles in the local CLI store:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="go">zeroshot ui --target docker</span>
+</code></pre></div>
+<p>Use <code>--target cloud</code> after signing in to inspect Cloud runs through the same local UI.</p>
 <p><strong>Profiles</strong> edits graphs and runtime settings; the info icon explains authoring defaults.
-Saved profiles share the CLI's configuration store (<code>ZEROSHOT_CONFIG_DIR</code>); run history uses
-<code>ZEROSHOT_STATE_DIR</code>. Start a saved local profile from the CLI:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="go">zeroshot run --title "My task" --profile local:my-profile --input input.json</span>
+Saved profiles share the CLI's configuration store (<code>ZEROSHOT_CONFIG_DIR</code>); without <code>--target</code>,
+run history uses <code>ZEROSHOT_STATE_DIR</code>. Start a saved local profile from the CLI:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="go">zeroshot run --title "My task" --profile local:my-profile --input input.json</span>
 </code></pre></div>
 <p>Open <strong>Runs</strong> for <a href="../../guides/observe-and-control/#browser">live monitoring and replay</a>.
 The <a href="../../concepts/targets/#direct-target">Docker target</a> serves its own profiles and runs at <code>/ui/</code>.
 Cloud embedding remains tracked in <a href="https://github.com/the-open-engine/zero-cloud/issues/301">zero-cloud #301</a>.</p>
 <p>Release executables embed the UI. To build it from source:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="go">npm --prefix ui ci --ignore-scripts</span>
-<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="go">npm --prefix ui run build</span>
-<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="go">cargo build --release --package zeroshot --features ui</span>
-<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="go">./target/release/zeroshot ui</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="go">npm --prefix ui ci --ignore-scripts</span>
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="go">npm --prefix ui run build</span>
+<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="go">cargo build --release --package zeroshot --features ui</span>
+<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="go">./target/release/zeroshot ui</span>
 </code></pre></div>
 <p>Node.js is needed for this build, not to serve the resulting UI. Library consumers
 can leave the <code>ui</code> feature disabled.</p>
@@ -1678,7 +1682,7 @@ can leave the <code>ui</code> feature disabled.</p>
 login and configuration. Other provider lanes can read declared values from the current environment
 or the private Zeroshot connection store. For example, this command prompts without echo and keeps
 an OpenAI value out of runtime JSON for a contained target:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="go">zeroshot connection set openai --field OPENAI_API_KEY</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="go">zeroshot connection set openai --field OPENAI_API_KEY</span>
 </code></pre></div>
 <p>Use <code>openrouter</code>, <code>anthropic</code>, <code>bedrock</code>, or <code>gateway</code> as the connection key when the effective
 runtime declares that provider. <a href="../../concepts/runtimes-and-connections/">Runtimes and connections</a>
@@ -1689,7 +1693,7 @@ the canonical <code>zeroshot-skill.md</code>, and <code>SHA256SUMS</code>; archi
 target triple.</p>
 <p>The Python SDK requires Python 3.11 or newer and ships the matching executable inside each platform
 wheel:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="go">python -m pip install the-open-engine-zeroshot</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="go">python -m pip install the-open-engine-zeroshot</span>
 </code></pre></div>
 <p>For a long-running target, use <code>ghcr.io/the-open-engine/zeroshot-target</code>. See the
 <a href="../../concepts/targets/">targets guide</a> for a Docker setup bound to loopback.</p>
@@ -1717,7 +1721,7 @@ inherit ambient credentials or headers.</p>
 <p>This is Copilot's native same-user boundary: secret fields are not inherited by ordinary shell or
 MCP environments and are redacted from output, but the flag is not OS isolation from an adversarial
 process running as your own user.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="p">{</span><span class="w"> </span><span class="nt">"harness"</span><span class="p">:</span><span class="w"> </span><span class="s2">"copilot"</span><span class="p">,</span><span class="w"> </span><span class="nt">"provider"</span><span class="p">:</span><span class="w"> </span><span class="s2">"github"</span><span class="p">,</span><span class="w"> </span><span class="nt">"model"</span><span class="p">:</span><span class="w"> </span><span class="s2">"auto"</span><span class="w"> </span><span class="p">}</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="p">{</span><span class="w"> </span><span class="nt">"harness"</span><span class="p">:</span><span class="w"> </span><span class="s2">"copilot"</span><span class="p">,</span><span class="w"> </span><span class="nt">"provider"</span><span class="p">:</span><span class="w"> </span><span class="s2">"github"</span><span class="p">,</span><span class="w"> </span><span class="nt">"model"</span><span class="p">:</span><span class="w"> </span><span class="s2">"auto"</span><span class="w"> </span><span class="p">}</span>
 </code></pre></div>
 <p>Model IDs pass unchanged to the Copilot process. When a registry entry with <code>apiKeyCommand</code> must use
 Copilot's singular provider contract, its authored <code>modelId</code> becomes the RPC session model and its
