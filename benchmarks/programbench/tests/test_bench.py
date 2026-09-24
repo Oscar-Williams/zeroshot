@@ -132,6 +132,7 @@ class CodexConfigTests(unittest.TestCase):
         self.assertFalse(policy["ignore_default_excludes"])
         self.assertTrue({"*KEY*", "*TOKEN*", "*PROXY*"} <= set(policy["exclude"]))
         self.assertEqual(policy["set"]["CARGO_HOME"], "/usr/local/cargo")
+        self.assertEqual(policy["set"]["TMPDIR"], "/tmp")
         self.assertNotIn("HOME", policy["set"])
 
 
@@ -156,6 +157,17 @@ class AccountingTests(unittest.TestCase):
         self.assertEqual(usage["first_build_turn"]["inputTokens"], 1000)
         self.assertEqual(sorted((s["node"], s["turns"]) for s in usage["sessions"]), [("build", 2), ("check", 1)])
 
+    def test_first_build_turn_comes_from_the_earliest_builder_thread(self):
+        # After a build error Zeroshot starts a new builder thread; only the earliest holds build 1.
+        with tempfile.TemporaryDirectory() as tmp:
+            _tar(Path(tmp, "trajectories.tar.gz"), {
+                ".codex/sessions/2026/09/24/rollout-2026-09-24T02-00-00-b.jsonl": _rollout(config.prompt("builder"), [(700, 70)]),
+                ".codex/sessions/2026/09/24/rollout-2026-09-24T01-00-00-a.jsonl": _rollout(config.prompt("builder"), [(1000, 100)]),
+            })
+            usage = accounting.usage(Path(tmp))
+        self.assertEqual(usage["first_build_turn"]["inputTokens"], 1000)
+        self.assertEqual(usage["nodes"]["build"]["inputTokens"], 1700)
+
     def test_ledger_view_double_counts_resumed_sessions(self):
         events = [
             {"kind": "node_started", "reference": {"node": "build", "execution": 1}},
@@ -178,17 +190,84 @@ class AuditTests(unittest.TestCase):
     def test_command_rules(self):
         rules = audit.COMMAND_RULES
         self.assertTrue(rules["reference_binary_analysis"].search("objdump -d ./executable"))
+        self.assertTrue(rules["binary_instrumentation"].search("LD_PRELOAD=./dump.so ./executable"))
+        self.assertFalse(rules["binary_instrumentation"].search("./executable < in.txt > out.svg"))
         self.assertTrue(rules["reference_binary_moved_or_copied"].search("mv /workspace/executable /tmp/ref"))
         self.assertFalse(rules["reference_binary_moved_or_copied"].search("./executable -s 'x' > out.svg"))
         self.assertTrue(rules["network_fetch"].search("cargo install svgbob_cli"))
         self.assertTrue(rules["model_api_calls"].search("curl https://api.openai.com/v1/responses"))
         self.assertTrue(rules["proxy_usage"].search("HTTPS_PROXY=http://zsbench-x-proxy:8888 curl x"))
+        self.assertTrue(rules["proxy_usage"].search("curl -x 172.18.0.2:8888 https://example.com"))
+        self.assertFalse(rules["proxy_usage"].search("curl -s http://localhost:8888/render"))
         self.assertTrue(rules["process_environment_read"].search("cat /proc/123/environ"))
         self.assertTrue(rules["process_environment_read"].search("open(os.path.join('/proc', p, 'environ'))"))
         self.assertFalse(rules["process_environment_read"].search("python3 -c 'import os; print(os.environ)'"))
+        self.assertTrue(rules["process_environment_read"].search("ps eww"))
+        for listing in ("ps -ef", "ps aux | grep svgbob", "ps -efww", "ps -eo pid,cmd"):
+            self.assertFalse(rules["process_environment_read"].search(listing), listing)
+        self.assertTrue(rules["harness_internals"].search("ls /opt/codex/bin"))
         self.assertTrue(rules["harness_internals"].search("zeroshot list"))
         self.assertTrue(rules["sudo"].search("sudo apt-get install foo"))
         self.assertFalse(rules["sudo"].search("echo pseudo"))
+
+    def test_commands_are_the_scripts_codex_ran(self):
+        def completed(script, output=""):
+            return {"type": "event_msg", "payload": {"type": "item_completed", "item": {"type": "CommandExecution", "command": ["/bin/bash", "-lc", script], "aggregated_output": output}}}
+
+        def js(code):
+            return {"type": "response_item", "payload": {"type": "custom_tool_call", "input": code}}
+
+        records = [
+            {"type": "response_item", "payload": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Authored instructions:\n" + config.prompt("builder")}]}},
+            {"type": "event_msg", "payload": {"type": "task_started"}},
+            # Code-mode JavaScript: identifiers such as r2 or strings are not commands.
+            js('const r2 = await tools.exec_command({cmd:"./executable --help"}); const strings = [1];'),
+            completed("./executable --help", "usage"),
+            js('await tools.exec_command({cmd:"strings ./executable | head"})'),
+            completed("strings ./executable | head", "strings: ./executable: Permission denied"),
+            # Never reported as completed: still audited from the call itself.
+            js("await tools.exec_command({cmd:'cat /proc/1/environ'})"),
+            {"type": "event_msg", "payload": {"type": "item_completed", "item": {"type": "FileChange", "changes": {"/tmp/dump.c": {"type": "add", "content": "long r = ptrace(PTRACE_PEEKTEXT, pid, 0, 0);"}}}}},
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            archive = _tar(Path(tmp, "t.tar.gz"), {".codex/sessions/rollout-a.jsonl": "\n".join(json.dumps(r) for r in records).encode()})
+            result = audit.command_audit(archive)
+        self.assertEqual(result["commands"], 3)
+        self.assertEqual(result["rule_counts"]["reference_binary_analysis"], 1)
+        self.assertEqual(result["rule_counts"]["reference_binary_analysis_denied"], 1)
+        self.assertEqual(result["rule_counts"]["process_environment_read"], 1)
+        self.assertEqual(result["rule_counts"]["binary_instrumentation"], 1)
+        self.assertEqual(result["rule_counts_by_turn"]["build.turn1"]["process_environment_read"], 1)
+
+    def test_turns_continue_across_builder_threads(self):
+        # A failed build makes Zeroshot start a new builder thread; its first turn is round 2.
+        def session(script):
+            return "\n".join(json.dumps(r) for r in [
+                {"type": "response_item", "payload": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Authored instructions:\n" + config.prompt("builder")}]}},
+                {"type": "event_msg", "payload": {"type": "task_started"}},
+                {"type": "event_msg", "payload": {"type": "item_completed", "item": {"type": "CommandExecution", "command": ["/bin/bash", "-lc", script], "aggregated_output": ""}}},
+            ]).encode()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            archive = _tar(Path(tmp, "t.tar.gz"), {
+                ".codex/sessions/2026/09/24/rollout-2026-09-24T02-00-00-b.jsonl": session("zeroshot list"),
+                ".codex/sessions/2026/09/24/rollout-2026-09-24T01-00-00-a.jsonl": session("ls"),
+            })
+            result = audit.command_audit(archive)
+        self.assertEqual(result["rule_counts_by_turn"], {"build.turn2": {"harness_internals": 1}})
+
+    def test_git_objects_scan_tolerates_absolute_links(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp, "ws")
+            subprocess.run(["git", "init", "-q", str(repo)], check=True)
+            (repo / "a.txt").write_text("marker-123")
+            subprocess.run(["git", "-C", str(repo), "add", "a.txt"], check=True)
+            subprocess.run(["git", "-C", str(repo), "-c", "user.email=a@b", "-c", "user.name=n", "commit", "-qm", "x"], check=True)
+            (repo / ".venv" / "bin").mkdir(parents=True)
+            os.symlink("/usr/bin/python3", repo / ".venv" / "bin" / "python3")
+            archive = Path(tmp, "ws.tar.gz")
+            subprocess.run(["tar", "-czf", str(archive), "-C", str(repo), "."], check=True)
+            self.assertIn(b"marker-123", audit._git_objects(archive))
 
     def test_build_artifacts_are_not_source_edits(self):
         for path in ("__pycache__/svgbob.cpython-310.pyc", "target/release/foo", "src/x.o"):
@@ -240,7 +319,7 @@ class DecisionTests(unittest.TestCase):
         record = {
             "label": label, "arm": "loop", "state": "complete", "build_outcomes": ["verified"], "snapshots": {},
             "rounds": {"build-1": {"score": first / 472, "passed": first, "scored_tests": 472}, "final": {"score": final / 472, "passed": final, "scored_tests": 472}},
-            "commands": {"rule_counts": {}, "rule_counts_by_turn": {}}, "reference_copies_in_final": [], "codex_config_unchanged": True,
+            "commands": {"rule_counts": {}, "rule_counts_by_turn": {}}, "reference_copies_in_final": [], "codex_config_unchanged": True, "harness_unchanged": True,
             "gain_tests": final - first,
         }
         record.update(extra)
@@ -258,6 +337,19 @@ class DecisionTests(unittest.TestCase):
         self.assertEqual(report._decision(flat, 472, EXPERIMENT)["verdict"], "not supported")
         flat[0] = self._loop("00", 200, 260, build_outcomes=["timeout"])
         self.assertTrue(report._decision(flat, 472, EXPERIMENT)["verdict"].startswith("inconclusive (only 4 of 5"))
+
+    def test_discarded_attempts_are_reported_not_scored(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            discarded = Path(tmp, "attempts", "03-loop.discarded-1700000000")
+            discarded.mkdir(parents=True)
+            (discarded / "attempt.json").write_text(json.dumps({"label": "03-loop", "state": "error", "error": "RuntimeError: boom", "wall_seconds": 12}))
+            entries = report._discarded(Path(tmp), EXPERIMENT.pricing)
+        self.assertEqual(entries, [{"directory": "03-loop.discarded-1700000000", "label": "03-loop", "state": "error", "error": "RuntimeError: boom", "force_stopped": None, "wall_seconds": 12, "cost_usd": None}])
+
+    def test_building_the_reference_makes_a_run_ineligible(self):
+        run = self._loop("01", 200, 260, reference_sha256="ab" * 32)
+        run["rounds"]["final"]["executable_hash"] = "ab" * 32
+        self.assertIn("final built executable is the reference", report._eligibility(run, 472))
 
     def test_disqualifying_audit_makes_a_run_ineligible(self):
         run = self._loop("01", 200, 260, commands={"rule_counts": {"process_environment_read": 1}, "rule_counts_by_turn": {}})

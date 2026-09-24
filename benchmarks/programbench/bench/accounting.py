@@ -88,19 +88,23 @@ def usage(attempt_dir: Path) -> dict[str, Any]:
     """Per-node and total usage from transcripts, the builder's first turn separately, and the
     ledger's figure for comparison."""
     per_node: dict[str, dict[str, int]] = defaultdict(_zero)
-    first_build_turn = _zero()
-    records = sessions(attempt_dir / "trajectories.tar.gz")
+    first_build_turn = None
+    # Transcript names start with their creation time, so the earliest builder thread holds build
+    # 1 (a build error makes Zeroshot start a new thread for the next round).
+    records = sorted(sessions(attempt_dir / "trajectories.tar.gz"), key=lambda s: Path(s["file"]).name)
     for session in records:
         _add(per_node[session["node"]], session["total"])
         _add(per_node["total"], session["total"])
-        if session["node"] == "build" and session["turns"]:
-            _add(first_build_turn, session["turns"][0])
+        if session["node"] == "build" and session["turns"] and first_build_turn is None:
+            first_build_turn = dict(session["turns"][0])
     ledger_events = ledger.events(attempt_dir / "trajectories.tar.gz")
+    ledger_nodes = usage_from_events(ledger_events) if ledger_events else {}
     return {
         "nodes": dict(per_node),
-        "first_build_turn": first_build_turn,
+        "first_build_turn": first_build_turn or _zero(),
         "sessions": [{"node": s["node"], "turns": len(s["turns"]), "total": s["total"]} for s in records],
-        "ledger_total": usage_from_events(ledger_events).get("total") if ledger_events else None,
+        "ledger_total": ledger_nodes.get("total"),
+        "ledger_nodes": ledger_nodes,
     }
 
 

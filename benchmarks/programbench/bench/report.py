@@ -45,6 +45,8 @@ def _eligibility(record: dict[str, Any], expected_tests: int | None) -> list[str
             reasons.append(f"{name} scored {score.get('scored_tests')} of {expected_tests} tests")
         if score.get("error_code") or score.get("test_branch_errors"):
             reasons.append(f"{name} eval error {score.get('error_code') or score.get('test_branch_errors')}")
+        if record.get("reference_sha256") and score.get("executable_hash") == record["reference_sha256"]:
+            reasons.append(f"{name} built executable is the reference")
     first_build = (record.get("build_outcomes") or [None])[0]
     if first_build != "verified":
         reasons.append(f"build 1 ended {first_build}")
@@ -58,10 +60,12 @@ def _eligibility(record: dict[str, Any], expected_tests: int | None) -> list[str
         reasons.append("audit: web search")
     if ((commands.get("rule_counts_by_turn") or {}).get("build.turn1") or {}).get("harness_internals"):
         reasons.append("audit: builder read harness internals in round 1")
-    if record.get("reference_copies_in_final"):
-        reasons.append("final archive contains the reference binary")
+    if record.get("reference_copies_in_final") or record.get("reference_copies_in_first_build"):
+        reasons.append("a scored archive contains the reference binary")
     if record.get("codex_config_unchanged") is False:
         reasons.append("Codex config was modified during the run")
+    if record.get("harness_unchanged") is not True:
+        reasons.append("harness binaries were modified during the run" if record.get("harness_unchanged") is False else "harness integrity not checked")
     return reasons
 
 
@@ -80,7 +84,8 @@ def build(exp: Experiment, results: Path) -> dict[str, Any]:
         usage = accounting.usage(directory)
         costs = {node: round(accounting.cost(t, exp.pricing), 4) for node, t in usage["nodes"].items()}
         first_turn_cost = round(accounting.cost(usage["first_build_turn"], exp.pricing), 4)
-        snapshot_order = sorted((meta.get("snapshots") or {}), key=lambda k: (meta["snapshots"][k].get("started_at") or 0))
+        snapshots = {k: v for k, v in (meta.get("snapshots") or {}).items() if isinstance(v, dict)}
+        snapshot_order = sorted(snapshots, key=lambda k: snapshots[k].get("started_at") or 0)
         archived_config = _archived_codex_config(directory / "trajectories.tar.gz")
         record = {
             "label": label,
@@ -97,13 +102,16 @@ def build(exp: Experiment, results: Path) -> dict[str, Any]:
             "rounds": rounds,
             "score_final": (rounds.get("final") or {}).get("score"),
             "score_first_build": (rounds.get("build-1") or {}).get("score"),
-            "snapshots": meta.get("snapshots"),
+            "snapshots": snapshots,
             "tokens": usage,
             "cost_usd": costs,
             "cost_first_build_turn_usd": first_turn_cost,
             "commands": audit.command_audit(directory / "trajectories.tar.gz"),
             "checker_edits": audit.checker_edits(directory, snapshot_order),
+            "reference_sha256": meta.get("reference_sha256"),
+            "harness_unchanged": meta.get("harness_unchanged"),
             "reference_copies_in_final": audit.reference_copies(directory / "submission.tar.gz", meta.get("reference_sha256")),
+            "reference_copies_in_first_build": audit.reference_copies(directory / "snapshots" / "build-1.tar.gz", meta.get("reference_sha256")),
             "codex_config_unchanged": None if archived_config is None or not manifest.get("codex_config") else archived_config == manifest["codex_config"],
         }
         final, first = rounds.get("final") or {}, rounds.get("build-1") or {}
@@ -118,6 +126,7 @@ def build(exp: Experiment, results: Path) -> dict[str, Any]:
         "effort": exp.effort,
         "expected_scored_tests": expected_tests,
         "attempts": attempts,
+        "discarded_attempts": _discarded(results, exp.pricing),
         "arms": _arms(attempts),
         "h1_decision": _decision(attempts, expected_tests, exp),
         "baseline_check": _baseline_check(attempts),
@@ -128,6 +137,30 @@ def build(exp: Experiment, results: Path) -> dict[str, Any]:
     write_json(results / "summary.json", summary)
     (results / "summary.md").write_text(markdown(summary))
     return summary
+
+
+def _discarded(results: Path, pricing: dict[str, Any]) -> list[dict[str, Any]]:
+    """Attempts replaced by a re-run (``NN-arm.discarded-<time>``): kept, reported, never scored."""
+    out = []
+    for directory in sorted((results / "attempts").glob("*.discarded-*")):
+        path = directory / "attempt.json"
+        meta = read_json(path) if path.exists() else {}
+        out.append({
+            "directory": directory.name,
+            "label": meta.get("label"),
+            "state": meta.get("state"),
+            "error": meta.get("error"),
+            "force_stopped": meta.get("force_stopped"),
+            "wall_seconds": meta.get("wall_seconds"),
+            "cost_usd": _total_cost(accounting.usage(directory), pricing),
+        })
+    return out
+
+
+def _total_cost(usage: dict[str, Any], pricing: dict[str, Any]) -> float | None:
+    """None when no transcript was recovered: unknown, not free."""
+    total = usage["nodes"].get("total")
+    return None if total is None else round(accounting.cost(total, pricing), 4)
 
 
 def _secrets(results: Path) -> dict[str, Any]:
@@ -145,7 +178,7 @@ def _arms(attempts: list[dict[str, Any]]) -> dict[str, Any]:
     for arm in sorted({a["arm"] for a in attempts}):
         group = [a for a in attempts if a["arm"] == arm]
         finals = [a["score_final"] for a in group if a["score_final"] is not None]
-        costs = [a["cost_usd"].get("total", 0.0) for a in group]
+        costs = [a["cost_usd"]["total"] for a in group if "total" in a["cost_usd"]]
         arms[arm] = {
             "runs": len(group),
             "complete": sum(1 for a in group if a["state"] == "complete"),
@@ -154,6 +187,7 @@ def _arms(attempts: list[dict[str, Any]]) -> dict[str, Any]:
             "median_final": statistics.median(finals) if finals else None,
             "mean_final": statistics.fmean(finals) if finals else None,
             "collapses_below_5pct": sum(1 for s in finals if s < 0.05),
+            "costed": len(costs),
             "mean_cost_usd": statistics.fmean(costs) if costs else None,
             "total_cost_usd": round(sum(costs), 4),
         }
@@ -218,18 +252,33 @@ def markdown(summary: dict[str, Any]) -> str:
             flags.append("checker_edited_sources")
         if a.get("force_stopped"):
             flags.append(f"force-stopped ({a['force_stopped']})")
+        if a.get("error"):
+            flags.append(f"error: {a['error'][:80]}")
+        if a.get("reference_sha256") and any((v or {}).get("executable_hash") == a["reference_sha256"] for v in a["rounds"].values()):
+            flags.append("built executable is the reference")
+        if a.get("harness_unchanged") is False:
+            flags.append("harness modified")
+        for name in ("build-1", "final"):
+            score = (a["rounds"].get(name) or {})
+            if score.get("error_code") or score.get("test_branch_errors"):
+                flags.append(f"{name} eval error: {score.get('error_code') or 'test branch errors'}")
         if a.get("ineligible_reasons"):
             flags.append("H1-ineligible")
+        cost = a["cost_usd"].get("total")
         gain = a.get("gain_tests")
         n = summary.get("expected_scored_tests") or 0
         lines.append(
             f"| {a['label']} | {a['arm']} | {a['state']} | {a['builds'] or 0} | {', '.join(v or '—' for v in a['verdicts']) or '—'} | "
             f"{_pct(a['score_first_build'])} | {_pct(a['score_final'])} | {'—' if gain is None or not n else f'{gain:+d} tests ({100 * gain / n:+.1f} pp)'} | "
-            f"{(a['wall_seconds'] or 0) / 60:.0f} | {a['cost_usd'].get('total', 0):.2f} | {', '.join(flags) or '—'} |"
+            f"{(a['wall_seconds'] or 0) / 60:.0f} | {'—' if cost is None else f'{cost:.2f}'} | {', '.join(flags) or '—'} |"
         )
     lines += ["", "| Arm | Runs | Complete | Scored | Median final | Mean final | Collapses | Mean cost |", "|---|---|---|---|---|---|---|---|"]
     for arm, s in summary["arms"].items():
-        lines.append(f"| {arm} | {s['runs']} | {s['complete']} | {s['scored']} | {_pct(s['median_final'])} | {_pct(s['mean_final'])} | {s['collapses_below_5pct']} | ${(s['mean_cost_usd'] or 0):.2f} |")
+        mean_cost = "—" if s["mean_cost_usd"] is None else f"${s['mean_cost_usd']:.2f} (n={s['costed']})"
+        lines.append(f"| {arm} | {s['runs']} | {s['complete']} | {s['scored']} | {_pct(s['median_final'])} | {_pct(s['mean_final'])} | {s['collapses_below_5pct']} | {mean_cost} |")
+    for d in summary.get("discarded_attempts") or []:
+        cost = "unknown cost" if d["cost_usd"] is None else f"${d['cost_usd']:.2f}"
+        lines.append(f"- Discarded and re-run: {d['directory']} ({d['state']}; {d.get('error') or d.get('force_stopped') or 'no error recorded'}; {cost})")
     d = summary.get("h1_decision")
     if d:
         lines += ["", f"**H1 (pre-registered): {d['verdict']}.** Eligible loop runs: {d['eligible_runs']}/{d['required_runs']}."]

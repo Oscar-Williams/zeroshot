@@ -56,7 +56,7 @@
     "retrieved": "2026-09-23"
   },
   "decision_rule": {
-    "eligibility": "A loop run enters the analysis only if it completed, its first-build snapshot and final workspace were both scored on all tests without eval errors, build 1 ended cleanly, it has no disqualifying audit finding (reference binary analysis, direct model-API calls, proxy use by tools, process-environment reads, web search), its builder did not touch harness internals in round 1, its final archive holds no copy of the reference, and the Codex config was unchanged. All 5 loop runs must be eligible; otherwise the verdict is inconclusive.",
+    "eligibility": "A loop run enters the analysis only if it completed, its first-build snapshot and final workspace were both scored on all tests without eval errors, build 1 ended cleanly, it has no disqualifying audit finding (binary instrumentation such as LD_PRELOAD or ptrace, direct model-API calls, proxy use by tools, process-environment reads, web search), its builder did not touch harness internals in round 1, neither scored workspace contains or builds the reference executable, and the Codex config was unchanged. All 5 loop runs must be eligible; otherwise the verdict is inconclusive.",
     "metric": "paired within-run gain in hidden tests passed: final workspace minus the workspace when build 1 completed; the final workspace counts even if the 6-hour cap force-stopped the run",
     "supported": "every loop run gains at least 1 percentage point and the median gain is at least 5 percentage points",
     "not_supported": "the median gain is below 2 percentage points",

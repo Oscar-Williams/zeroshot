@@ -31,6 +31,7 @@ DIAGNOSTIC_TASK = """This is an environment diagnostic, not a coding task. Run e
   echo "KEY_VARS_VISIBLE=$(env | grep -c -E '^(OPENAI_API_KEY|CODEX_API_KEY)=')"
   echo "PROC_KEY_VISIBLE=$(grep -l -a -E '(OPENAI_API_KEY|CODEX_API_KEY)=' /proc/[0-9]*/environ 2>/dev/null | wc -l)"
   echo "PROXY_VARS_VISIBLE=$(env | grep -c -i -E '^(https?|all)_proxy=')"
+  echo "TMPDIR=${TMPDIR:-unset}"
   echo "CARGO=$(cargo --version 2>&1 | head -1)"
   echo "RUSTC=$(rustc --version 2>&1 | head -1)"
   echo "GO=$(go version 2>&1 | head -1)"
@@ -152,6 +153,7 @@ class Smoke:
             self.check("key_not_in_tool_env", lambda: (values.get("KEY_VARS_VISIBLE") == "0", f"KEY_VARS_VISIBLE={values.get('KEY_VARS_VISIBLE')}"))
             self.check("key_not_readable_from_proc", lambda: (values.get("PROC_KEY_VISIBLE") == "0", f"PROC_KEY_VISIBLE={values.get('PROC_KEY_VISIBLE')}"))
             self.check("proxy_not_in_tool_env", lambda: (values.get("PROXY_VARS_VISIBLE") == "0", f"PROXY_VARS_VISIBLE={values.get('PROXY_VARS_VISIBLE')}"))
+            self.check("tool_tmpdir_is_plain_tmp", lambda: (values.get("TMPDIR") == "/tmp", f"TMPDIR={values.get('TMPDIR')}"))
             self.check("toolchain_env_in_tools", lambda: (
                 values.get("CARGO", "").startswith("cargo ") and values.get("RUSTC", "").startswith("rustc ") and values.get("GO", "").startswith("go version"),
                 {k: values.get(k) for k in ("CARGO", "RUSTC", "GO", "PYTHON", "RG")}))
@@ -214,6 +216,20 @@ def pipeline_checks(smoke: Smoke, summary: dict[str, Any]) -> None:
     smoke.check("pipeline_costed_from_transcripts", lambda: (
         all(a["cost_usd"].get("total", 0) > 0 and a["tokens"]["sessions"] for a in attempts.values()),
         {k: {"cost": a["cost_usd"], "sessions": [(s["node"], s["turns"]) for s in a["tokens"]["sessions"]], "ledger_input": (a["tokens"]["ledger_total"] or {}).get("inputTokens"), "transcript_input": a["tokens"]["nodes"].get("total", {}).get("inputTokens")} for k, a in attempts.items()}))
+
+    def transcripts_match_ledger() -> tuple[bool, Any]:
+        """Fresh threads (every check; the single arm's build) must agree exactly with the ledger;
+        only a resumed builder thread is over-counted there."""
+        detail: dict[str, Any] = {}
+        for a in attempts.values():
+            ledger_nodes, nodes = a["tokens"].get("ledger_nodes") or {}, a["tokens"]["nodes"]
+            for node in ["check"] + (["build"] if a["arm"] == "single" else []):
+                if node in ledger_nodes or node in nodes:
+                    same = ledger_nodes.get(node) == nodes.get(node)
+                    detail[f"{a['label']}.{node}"] = "match" if same else {"ledger": ledger_nodes.get(node), "transcripts": nodes.get(node)}
+        return bool(detail) and all(v == "match" for v in detail.values()), detail
+
+    smoke.check("pipeline_transcripts_match_ledger", transcripts_match_ledger)
     smoke.check("pipeline_no_secret_in_artifacts", lambda: (summary["secrets"]["checked_literal_key"] and not summary["secrets"]["literal_key_hits"], summary["secrets"]))
     egress = summary.get("egress") or {}
     smoke.check("pipeline_egress_only_model_api", lambda: (set(egress.get("established") or {}) == {"api.openai.com"}, {k: egress.get(k) for k in ("established", "refused")}))
@@ -230,7 +246,15 @@ def pipeline_checks(smoke: Smoke, summary: dict[str, Any]) -> None:
             return any(m.name in ("./compile.sh", "compile.sh") for m in tar.getmembers())
 
     smoke.check("pipeline_builder_produced_compile_sh", lambda: (all(has_compile_sh(a["label"]) for a in attempts.values()), "compile.sh present in every final workspace"))
-    smoke.check("pipeline_no_reference_in_archives", lambda: (all(not a["reference_copies_in_final"] for a in attempts.values()), {k: a["reference_copies_in_final"] for k, a in attempts.items()}))
+
+    def reference_absent(a: dict[str, Any]) -> bool:
+        built = [v.get("executable_hash") for v in a["rounds"].values() if v]
+        return bool(a.get("reference_sha256")) and not a["reference_copies_in_final"] and not a.get("reference_copies_in_first_build") and a["reference_sha256"] not in built
+
+    smoke.check("pipeline_no_reference_in_archives", lambda: (
+        all(reference_absent(a) for a in attempts.values()),
+        {k: {"reference_sha256": (a.get("reference_sha256") or "")[:12], "in_final": a["reference_copies_in_final"], "in_build_1": a.get("reference_copies_in_first_build")} for k, a in attempts.items()}))
+    smoke.check("pipeline_harness_unchanged", lambda: (all(a.get("harness_unchanged") is True for a in attempts.values()), {k: a.get("harness_unchanged") for k, a in attempts.items()}))
     smoke.check("pipeline_codex_config_unchanged", lambda: (all(a["codex_config_unchanged"] is True for a in attempts.values()), {k: a["codex_config_unchanged"] for k, a in attempts.items()}))
     smoke.check("pipeline_provenance_recorded", lambda: (
         (summary.get("provenance") or {}).get("vcs_ref") not in (None, "unknown") and (summary.get("provenance") or {}).get("vcs_dirty") == "false",

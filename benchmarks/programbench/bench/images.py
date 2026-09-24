@@ -14,8 +14,10 @@ from .util import docker, download, log, run
 
 # Variables that Zeroshot or Codex set per process; everything else from the image ENV is mirrored.
 _NOT_MIRRORED = {"HOME", "HOSTNAME"}
-# Non-interactive settings the upstream mini-SWE-agent ProgramBench baseline exported.
-_BASELINE_ENV = {"PAGER": "cat", "MANPAGER": "cat", "LESS": "-R", "PIP_PROGRESS_BAR": "off", "TQDM_DISABLE": "1"}
+# Non-interactive settings the upstream mini-SWE-agent ProgramBench baseline exported, and the
+# image's plain /tmp: Zeroshot points Codex's TMPDIR into its run directory, which tool commands
+# should neither write into nor learn about.
+_BASELINE_ENV = {"PAGER": "cat", "MANPAGER": "cat", "LESS": "-R", "PIP_PROGRESS_BAR": "off", "TQDM_DISABLE": "1", "TMPDIR": "/tmp"}
 
 
 def _extract(archive: Path, member: str, dest: Path) -> None:

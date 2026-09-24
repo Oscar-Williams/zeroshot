@@ -26,10 +26,11 @@ single-worker baseline; the single arm checks that this baseline behaves like a 
 
 - **Eligibility:** a loop run counts only if it completed; its build-1 snapshot and final workspace
   were both scored on all tests without eval errors; build 1 ended cleanly; it has no
-  disqualifying audit finding (reference-binary analysis, direct model-API calls, proxy use by
-  tools, process-environment reads, web search); its builder did not touch harness internals in
-  round 1; its final archive holds no copy of the reference; and the Codex config was unchanged.
-  All 5 loop runs must be eligible, otherwise the verdict is *inconclusive*.
+  disqualifying audit finding (binary instrumentation such as `LD_PRELOAD` or ptrace, direct
+  model-API calls, proxy use by tools, process-environment reads, web search); its builder did not
+  touch harness internals in round 1; neither scored workspace contains or builds the reference
+  executable; and the Codex config was unchanged. All 5 loop runs must be eligible, otherwise the
+  verdict is *inconclusive*.
 - **Supported:** every loop run gains at least 1 percentage point (above eval noise) and the
   median gain is at least 5 points.
 - **Not supported:** the median gain is below 2 points. Otherwise *inconclusive*.
@@ -50,6 +51,12 @@ loop "solve" (max 4 rounds; stop when check.verdict = accepted)
   check  — Codex, fresh session every round; verdict accepted | rejected; its diagnostic
            becomes the builder's feedback for the next round
 ```
+
+Failed rounds follow Zeroshot's normal semantics. A build that errors or times out leaves the
+workspace as it is, the check still runs, and the next round's builder starts a new thread. A check
+that errors records no verdict, so the loop continues and the builder receives the previous feedback
+again (none, if the first check errors). Zeroshot retries a crashed check once, never a timeout or
+an invalid response.
 
 The only text we wrote is two generic role prompts, frozen before any run
 (`prompts/builder.md`, `prompts/checker.md`):
@@ -78,6 +85,8 @@ re-derive it byte-for-byte.
   for Zeroshot and Codex's full platform package (checksum-pinned releases) and a Codex config.
   The agent runs as the image's non-root `agent` user; the reference executable is execute-only.
   The image's own sudo rules (package managers, cargo, go) are left as ProgramBench ships them.
+  Their install hooks amount to root, so the harness files (Zeroshot, Codex) are fingerprinted at
+  the start and end of every attempt, and a change disqualifies the run.
 - **Network:** every attempt gets its own internal Docker network whose only exit is its own
   tinyproxy, which allows HTTPS `CONNECT` to `api.openai.com` and nothing else. Tool commands get
   no proxy settings and no DNS, so they have no route out, like the upstream `--network none`;
@@ -89,12 +98,16 @@ re-derive it byte-for-byte.
   shell snapshot (which otherwise re-exports the whole environment into tool shells), and the
   Zeroshot and Codex executables are root-owned and execute-only, so the kernel marks those
   processes non-dumpable and their `/proc/<pid>/environ` and memory are unreadable to the agent.
-  The smoke test proves each point from inside a real run. Codex memories are off, so no thread's
+  Codex's code-mode JavaScript runs in a bare V8 isolate that exposes only Codex's tool functions,
+  with no environment, file or network access. The smoke test proves each point from inside a real
+  run. Codex memories are off, so no thread's
   context reaches another. Every artifact — plain files, archive members, nested archives, and the
   decompressed git objects of archived repositories — is scanned for the literal key; a hit writes
   `DO-NOT-PUBLISH.txt` and fails the command.
 - **Tooling parity:** Zeroshot starts Codex with a minimal environment, so the rendered Codex
-  config mirrors the task image's ENV (`CARGO_HOME`, `RUSTUP_HOME`, …) into tool commands.
+  config mirrors the task image's ENV (`CARGO_HOME`, `RUSTUP_HOME`, …) into tool commands. It
+  also gives them the image's plain `/tmp` as `TMPDIR`, instead of a directory inside Zeroshot's
+  run state.
 - **Archives:** workspace archives are made as the `agent` user, like the upstream baseline, so the
   execute-only reference is never archived wherever the agent moves it. Agents do move it (the task
   asks them to build `./executable` at the same path), so every snapshot records where the
@@ -102,7 +115,7 @@ re-derive it byte-for-byte.
 
 Residual risks, documented rather than engineered away: filtering is by CONNECT host name, not TLS
 SNI; ProgramBench's eval runs agent-written code in networked test containers (use a host without
-an instance role, or with the metadata endpoint's hop limit at 1, as here).
+a cloud instance role and with the metadata endpoint's hop limit at 1, as for the pilot).
 
 ## Reproduce
 
@@ -119,13 +132,17 @@ scripts/zsbench smoke                               # ~30 min plus image pulls, 
 scripts/zsbench run experiments/luna-xhigh-svgbob.json
 ```
 
+To reproduce a published result exactly, check out the commit recorded in its `manifest.json`
+(`provenance.vcs_ref`) rather than the branch tip.
+
 `scripts/zsbench` builds the runner image (`Dockerfile`) and runs it with the host Docker socket
-mounted. It records the exact commit and refuses a paid `run` from a dirty or non-git tree
-(override with `ZSBENCH_ALLOW_DIRTY=1`). A key from the environment reaches the runner as a
-temporary read-only file, never as container config. Long runs: `ZSBENCH_DETACH=1 scripts/zsbench
-run …`, follow with `docker logs -f zsbench-runner`, and stop with `docker stop -t 1800
-zsbench-runner` so attempts are wound down and recorded. The runner refuses to resume into results
-from a different experiment digest, refuses to start while another runner's containers are
+mounted. It records the exact commit and refuses a paid `run` from a dirty or non-git tree (override
+with `ZSBENCH_ALLOW_DIRTY=1`). A key from the environment reaches the runner as a temporary
+read-only file, never as container config. Long runs: `ZSBENCH_DETACH=1 scripts/zsbench run …`,
+follow with `docker logs -f zsbench-runner`, and stop with `docker stop -t 1800 zsbench-runner` so
+attempts are wound down and recorded; evaluation is then skipped, and running the same command again
+resumes (stopped attempts start over, completed ones are kept). The runner refuses to resume into
+results from a different experiment digest, refuses to start while another runner's containers are
 running (`bench cleanup` removes them), and hands results back to the invoking user.
 
 Other commands: `plan` (render graphs and the attempt order), `check-key`, `eval` (re-score),
@@ -170,12 +187,18 @@ results/<experiment id>/
   splits into turns) with the experiment's pricing table (input, cache reads, cache writes,
   output). Zeroshot's ledger is reported alongside but not used: it double-counts a resumed
   thread's earlier turns.
-- **Audits:** Codex transcripts are scanned per node and turn for commands that inspect, move or
-  copy the reference binary, fetch from the network, call the model API, use the proxy, read
-  process environments, use sudo, read cached dependency sources, or touch harness internals, and
-  for web-search calls. Check rounds are diffed against the preceding snapshot to confirm
-  verifiers did not edit sources. Disqualifying findings are listed in the decision rule; the rest
-  are reported for human review.
+- **Audits:** the shell commands Codex actually ran (from its transcripts, not the code-mode
+  JavaScript around them) are scanned per node and turn, along with web-search calls and, for
+  instrumentation code, the files the agent wrote. Disqualifying findings are the channels that
+  could carry withheld information: instrumenting a binary (`LD_PRELOAD`, `LD_AUDIT`, ptrace, the
+  only way to look inside the execute-only, dynamically linked reference), calling the model API,
+  using the proxy, reading process environments, and web search. Reported for human review:
+  static analysis of anything named `executable` (the task allows it on the builder's own
+  binaries; on the reference it fails with a permission error, and such attempts are counted
+  separately), moving the reference, network fetch attempts, sudo, reading cached dependency
+  sources (the image holds no svgbob source), and touching harness internals. Check rounds are
+  diffed against the preceding snapshot to confirm verifiers did not edit sources, and every scored
+  archive and built executable is compared with the reference by hash.
 
 ## Known deviations from the public leaderboard setup
 

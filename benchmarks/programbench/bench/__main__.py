@@ -137,10 +137,14 @@ def _prepare(exp: config.Experiment, results: Path, allow_mixed: bool) -> tuple[
     return agent_image, proxy_image, provenance
 
 
-def _run_attempts(exp: config.Experiment, results: Path, agent_image: str, proxy_image: str, provenance: dict, keep: bool) -> None:
+def _run_attempts(exp: config.Experiment, results: Path, agent_image: str, proxy_image: str, provenance: dict, keep: bool) -> bool:
+    """Run every attempt; returns True if a stop was requested."""
     attempts = [Attempt(exp, spec, results, agent_image, proxy_image, provenance, keep) for spec in exp.attempts()]
+    stopped = False
 
     def stop(*_: object) -> None:
+        nonlocal stopped
+        stopped = True
         log("stop requested: running attempts are force-stopped, queued attempts are skipped")
         for attempt in attempts:
             attempt.request_stop()
@@ -150,16 +154,23 @@ def _run_attempts(exp: config.Experiment, results: Path, agent_image: str, proxy
     with ThreadPoolExecutor(max_workers=exp.resources["concurrency"]) as pool:
         futures = {pool.submit(a.run): a for a in attempts}  # submitted in the pre-registered order
         for future in as_completed(futures):
-            meta = future.result()
+            try:
+                meta = future.result()
+            except Exception as error:  # an attempt records its own errors; this is the runner failing around it
+                log(f"[{futures[future].spec.label}] RUNNER ERROR {type(error).__name__}: {error}")
+                continue
             log(f"[{meta['label']}] {meta['state']} after {meta.get('wall_seconds', 0) / 60:.1f} min")
+    return stopped
 
 
 def cmd_run(exp: config.Experiment, keep: bool, skip_eval: bool, allow_mixed: bool) -> dict:
     require_secret()
     results = _results(exp)
     agent_image, proxy_image, provenance = _prepare(exp, results, allow_mixed)
-    _run_attempts(exp, results, agent_image, proxy_image, provenance, keep)
-    if not skip_eval:
+    stopped = _run_attempts(exp, results, agent_image, proxy_image, provenance, keep)
+    if stopped:
+        log("stop requested: skipping evaluation (resume with `run`, or score what exists with `eval`)")
+    elif not skip_eval:
         evaluate.evaluate(exp, results, CACHE)
     summary = report.build(exp, results)
     log(f"summary written to {results / 'summary.md'}")

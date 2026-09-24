@@ -43,7 +43,7 @@ args=(
 )
 
 temp_secret=""
-cleanup() { [[ -n $temp_secret ]] && rm -f "$temp_secret"; }
+cleanup() { if [[ -n $temp_secret ]]; then rm -f "$temp_secret"; fi; }
 trap cleanup EXIT
 if [[ -n ${OPENAI_API_KEY:-} ]]; then
   echo "zsbench: using OPENAI_API_KEY from the environment" >&2

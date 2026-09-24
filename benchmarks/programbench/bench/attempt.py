@@ -40,6 +40,14 @@ TRAJECTORY_TAR = [
     "-C", "/home/agent", "-czf", "-", ".codex", ".local/state/zeroshot",
 ]
 TAR_OK = (0, 1)  # GNU tar: 1 = some files differ/changed while reading; the archive is valid
+# Content fingerprint of the harness files a later node would execute with the API key in its
+# environment. The image's sudo rules allow root through package-manager hooks, so the harness is
+# fingerprinted at start and end and any change is reported.
+HARNESS_FINGERPRINT = (
+    "cd / && find usr/local/bin/zeroshot usr/local/bin/codex opt/codex \\( -type f -o -type l \\) | LC_ALL=C sort | "
+    "while read -r f; do if [ -L \"$f\" ]; then echo \"link $f $(readlink \"$f\")\"; "
+    "else echo \"file $f $(stat -c %a:%u \"$f\") $(sha256sum < \"$f\" | cut -c1-64)\"; fi; done | sha256sum | cut -c1-64"
+)
 FINISH_GRACE_SECONDS = 900
 NEUTRAL_TITLE = "programbench attempt"
 
@@ -162,6 +170,7 @@ class Attempt:
         if len(size_and_hash) != 2:
             raise RuntimeError("reference executable missing at start")
         self.meta["reference_size"], self.meta["reference_sha256"] = int(size_and_hash[0]), size_and_hash[1]
+        self.meta["harness_fingerprint"] = self._harness_fingerprint()
 
     def _submit(self) -> str:
         receipt_text = docker(
@@ -192,6 +201,16 @@ class Attempt:
         self._save()
         log(f"[{self.spec.label}] submitted run {run_id}")
         return run_id
+
+    def _harness_fingerprint(self) -> str:
+        return docker("exec", "-u", "root", self.name, "sh", "-c", HARNESS_FINGERPRINT, timeout=600).strip()
+
+    def _check_harness(self) -> None:
+        try:
+            after = self._harness_fingerprint()
+            self.meta["harness_unchanged"] = bool(self.meta.get("harness_fingerprint")) and after == self.meta["harness_fingerprint"]
+        except Exception as error:
+            self.meta["harness_check_error"] = f"{type(error).__name__}: {error}"
 
     def _container_running(self) -> bool:
         return docker("inspect", "-f", "{{.State.Running}}", self.name, check=False).strip() == "true"
@@ -291,6 +310,7 @@ class Attempt:
 
     def _finish(self, run_id: str) -> None:
         (self.dir / "status.json").write_text(docker("exec", "-u", "agent", self.name, "zeroshot", "status", run_id, check=False))
+        self._check_harness()
         self._collect()
         recorded = ledger.events(self.dir / "trajectories.tar.gz")
         if recorded is None:
@@ -319,6 +339,8 @@ class Attempt:
             if self._container_running():
                 if self.meta.get("run_id"):
                     docker("exec", "-u", "agent", self.name, "zeroshot", "force-stop", self.meta["run_id"], check=False, timeout=300)
+                if self.meta.get("harness_fingerprint"):
+                    self._check_harness()
                 self._collect()
                 self.meta["salvaged"] = True
         except Exception as error:
