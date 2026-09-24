@@ -147,17 +147,13 @@ impl<'a> CopilotRpc<'a> {
             "session.create"
         };
         let created = self.request(method, params).await?;
-        if created["sessionId"].as_str() != Some(self.session_id.as_str()) {
-            return Err(failure("Copilot returned a different session identity"));
-        }
+        validate_session_identity(&created, &self.session_id)?;
         *session.id.lock().await = Some(self.session_id.clone());
         let outcome = self.run_response().await?;
         let detached = self
             .request("session.detach", json!({"sessionId":self.session_id}))
             .await?;
-        if detached["success"].as_bool() != Some(true) {
-            return Err(failure("Copilot session could not be detached"));
-        }
+        validate_detach(&detached)?;
         Ok(outcome)
     }
 
@@ -168,12 +164,7 @@ impl<'a> CopilotRpc<'a> {
                 json!({"clientInfo":{"extensionName":"zeroshot"}}),
             )
             .await?;
-        if connected["protocolVersion"].as_u64() != Some(3) {
-            return Err(failure(
-                "Copilot RPC protocol version is incompatible; install CLI 1.0.86",
-            ));
-        }
-        Ok(())
+        validate_protocol_version(&connected)
     }
 
     async fn run_response(&mut self) -> Result<WorkerOutcome, NodeRunnerError> {
@@ -225,14 +216,7 @@ impl<'a> CopilotRpc<'a> {
         method: &str,
         params: Value,
     ) -> Result<u64, NodeRunnerError> {
-        if self.pending.len() >= 128 {
-            return Err(failure("Copilot RPC pending request limit exceeded"));
-        }
-        self.next_id = self
-            .next_id
-            .checked_add(1)
-            .ok_or_else(|| failure("Copilot RPC identifier overflow"))?;
-        let id = self.next_id;
+        let id = reserve_request_id(&mut self.next_id, self.pending.len())?;
         self.queue(json!({"jsonrpc":"2.0", "id":id, "method":method, "params":params}))?;
         self.pending.insert(id);
         Ok(id)
@@ -247,9 +231,7 @@ impl<'a> CopilotRpc<'a> {
                 return Ok(result);
             }
         }
-        Err(failure(format!(
-            "Copilot exited before replying to {method}"
-        )))
+        Err(request_ended(method))
     }
 
     fn response_message(
@@ -257,34 +239,16 @@ impl<'a> CopilotRpc<'a> {
         message: &Value,
         expected: u64,
     ) -> Result<Option<Value>, NodeRunnerError> {
-        let id = message["id"]
-            .as_u64()
-            .ok_or_else(|| failure("Copilot RPC response has no valid identity"))?;
-        if !self.pending.remove(&id) {
-            return Err(failure("Copilot RPC response identity is unexpected"));
-        }
-        if let Some(error) = message.get("error") {
-            return Err(failure(format!(
-                "Copilot RPC failed: {}",
-                error["message"].as_str().unwrap_or("unknown error")
-            )));
-        }
-        let result = message
-            .get("result")
-            .ok_or_else(|| failure("Copilot RPC response has no result"))?;
-        Ok((id == expected).then(|| result.clone()))
+        resolve_response_message(&mut self.pending, message, expected)
     }
 
     async fn dispatch(&mut self, message: &Value) -> Result<(), NodeRunnerError> {
-        match message["method"].as_str() {
-            Some("session.event") => events::receive(self, &message["params"]).await,
-            Some("gitHubToken.getToken") if message.get("id").is_some() => {
-                self.acquire_token(message).await
-            }
-            _ if message.get("id").is_some() => self
-                .queue(json!({"jsonrpc":"2.0", "id":message["id"],
+        match dispatch_action(message) {
+            DispatchAction::Event => events::receive(self, &message["params"]).await,
+            DispatchAction::AcquireToken => self.acquire_token(message).await,
+            DispatchAction::Reject => self.queue(json!({"jsonrpc":"2.0", "id":message["id"],
                 "error":{"code":-32601,"message":"Method not supported by Zeroshot"}})),
-            _ => Ok(()),
+            DispatchAction::Ignore => Ok(()),
         }
     }
 
@@ -326,20 +290,11 @@ impl<'a> CopilotRpc<'a> {
         error: NodeRunnerError,
         completion: &crate::execution::process::ProcessSessionOutput,
     ) -> NodeRunnerError {
-        let mut detail = match error {
-            NodeRunnerError::Driver => "execution failed".to_owned(),
-            NodeRunnerError::DriverDetail(detail) => detail,
-            error => return error,
+        let mut detail = match failure_detail(error) {
+            Ok(detail) => detail,
+            Err(error) => return error,
         };
-        if !completion.stderr_tail.is_empty() {
-            let prefix = if completion.stderr_tail_truncated {
-                "; stderr (truncated tail): "
-            } else {
-                "; stderr: "
-            };
-            detail.push_str(prefix);
-            detail.push_str(&String::from_utf8_lossy(&completion.stderr_tail));
-        }
+        append_stderr_detail(&mut detail, completion);
         failure(provider_failure_diagnostic(
             "Copilot",
             Some(&detail),
@@ -375,3 +330,103 @@ impl<'a> CopilotRpc<'a> {
         Ok(())
     }
 }
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DispatchAction {
+    Event,
+    AcquireToken,
+    Reject,
+    Ignore,
+}
+
+fn dispatch_action(message: &Value) -> DispatchAction {
+    match message["method"].as_str() {
+        Some("session.event") => DispatchAction::Event,
+        Some("gitHubToken.getToken") if message.get("id").is_some() => DispatchAction::AcquireToken,
+        _ if message.get("id").is_some() => DispatchAction::Reject,
+        _ => DispatchAction::Ignore,
+    }
+}
+
+fn validate_protocol_version(connected: &Value) -> Result<(), NodeRunnerError> {
+    (connected["protocolVersion"].as_u64() == Some(3))
+        .then_some(())
+        .ok_or_else(|| failure("Copilot RPC protocol version is incompatible; install CLI 1.0.86"))
+}
+
+fn validate_session_identity(created: &Value, expected: &str) -> Result<(), NodeRunnerError> {
+    (created["sessionId"].as_str() == Some(expected))
+        .then_some(())
+        .ok_or_else(|| failure("Copilot returned a different session identity"))
+}
+
+fn validate_detach(detached: &Value) -> Result<(), NodeRunnerError> {
+    (detached["success"].as_bool() == Some(true))
+        .then_some(())
+        .ok_or_else(|| failure("Copilot session could not be detached"))
+}
+
+fn request_ended(method: &str) -> NodeRunnerError {
+    failure(format!("Copilot exited before replying to {method}"))
+}
+
+fn failure_detail(error: NodeRunnerError) -> Result<String, NodeRunnerError> {
+    match error {
+        NodeRunnerError::Driver => Ok("execution failed".to_owned()),
+        NodeRunnerError::DriverDetail(detail) => Ok(detail),
+        error => Err(error),
+    }
+}
+
+fn reserve_request_id(next_id: &mut u64, pending: usize) -> Result<u64, NodeRunnerError> {
+    if pending >= 128 {
+        return Err(failure("Copilot RPC pending request limit exceeded"));
+    }
+    *next_id = next_id
+        .checked_add(1)
+        .ok_or_else(|| failure("Copilot RPC identifier overflow"))?;
+    Ok(*next_id)
+}
+
+fn resolve_response_message(
+    pending: &mut BTreeSet<u64>,
+    message: &Value,
+    expected: u64,
+) -> Result<Option<Value>, NodeRunnerError> {
+    let id = message["id"]
+        .as_u64()
+        .ok_or_else(|| failure("Copilot RPC response has no valid identity"))?;
+    if !pending.remove(&id) {
+        return Err(failure("Copilot RPC response identity is unexpected"));
+    }
+    if let Some(error) = message.get("error") {
+        return Err(failure(format!(
+            "Copilot RPC failed: {}",
+            error["message"].as_str().unwrap_or("unknown error")
+        )));
+    }
+    let result = message
+        .get("result")
+        .ok_or_else(|| failure("Copilot RPC response has no result"))?;
+    Ok((id == expected).then(|| result.clone()))
+}
+
+fn append_stderr_detail(
+    detail: &mut String,
+    completion: &crate::execution::process::ProcessSessionOutput,
+) {
+    if completion.stderr_tail.is_empty() {
+        return;
+    }
+    let prefix = if completion.stderr_tail_truncated {
+        "; stderr (truncated tail): "
+    } else {
+        "; stderr: "
+    };
+    detail.push_str(prefix);
+    detail.push_str(&String::from_utf8_lossy(&completion.stderr_tail));
+}
+
+#[cfg(test)]
+#[path = "rpc/tests.rs"]
+mod tests;

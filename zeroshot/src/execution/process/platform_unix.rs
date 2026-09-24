@@ -46,20 +46,38 @@ pub(super) fn kill_process_tree(
     containment: ProcessContainment,
     child: &mut tokio::process::Child,
 ) -> Vec<String> {
-    let mut errors = Vec::new();
     #[cfg(target_os = "linux")]
-    if let Some(membership) = containment.membership() {
-        if let Err(error) = kill_linux_worker_processes(membership) {
-            errors.push(super::io_error_detail(
-                "worker process termination failed",
-                &error,
-            ));
-        }
-    }
+    let worker_termination = containment
+        .membership()
+        .map_or(Ok(()), kill_linux_worker_processes);
     #[cfg(not(target_os = "linux"))]
-    let _ = containment;
+    let worker_termination = {
+        let _ = containment;
+        Ok(())
+    };
+    kill_process_tree_with(
+        process_group_id,
+        worker_termination,
+        kill_process_group,
+        || child.start_kill(),
+    )
+}
+
+fn kill_process_tree_with(
+    process_group_id: Option<i32>,
+    worker_termination: Result<(), io::Error>,
+    mut kill_group: impl FnMut(i32) -> Result<(), io::Error>,
+    mut kill_root: impl FnMut() -> Result<(), io::Error>,
+) -> Vec<String> {
+    let mut errors = Vec::new();
+    if let Err(error) = worker_termination {
+        errors.push(super::io_error_detail(
+            "worker process termination failed",
+            &error,
+        ));
+    }
     let Some(process_group_id) = process_group_id else {
-        if let Err(error) = child.start_kill() {
+        if let Err(error) = kill_root() {
             errors.push(super::io_error_detail(
                 "root process termination failed",
                 &error,
@@ -67,13 +85,13 @@ pub(super) fn kill_process_tree(
         }
         return errors;
     };
-    if let Err(error) = kill_process_group(process_group_id) {
-        if error.raw_os_error() != Some(libc::ESRCH) {
+    if let Err(error) = kill_group(process_group_id) {
+        if !process_is_missing(&error) {
             errors.push(super::io_error_detail(
                 "process group termination failed",
                 &error,
             ));
-            if let Err(error) = child.start_kill() {
+            if let Err(error) = kill_root() {
                 errors.push(super::io_error_detail(
                     "root process termination fallback failed",
                     &error,
@@ -112,22 +130,11 @@ fn process_group_exists(process_group_id: i32) -> Result<bool, io::Error> {
 
 #[cfg(target_os = "linux")]
 pub(super) fn reap_process_group_children(process_group_id: i32) -> Result<(), io::Error> {
-    loop {
-        let result =
-            unsafe { libc::waitpid(-process_group_id, std::ptr::null_mut(), libc::WNOHANG) };
-        if result > 0 {
-            continue;
-        }
-        if result == 0 {
-            return Ok(());
-        }
-        let error = io::Error::last_os_error();
-        match error.raw_os_error() {
-            Some(libc::ECHILD) => return Ok(()),
-            Some(libc::EINTR) => {}
-            _ => return Err(error),
-        }
-    }
+    reap_with(ReapTarget::ProcessGroup, || {
+        waitpid_result(unsafe {
+            libc::waitpid(-process_group_id, std::ptr::null_mut(), libc::WNOHANG)
+        })
+    })
 }
 
 #[cfg(target_os = "linux")]
@@ -135,16 +142,18 @@ pub(super) fn reap_and_kill_worker_processes(
     membership: WorkerMembership,
 ) -> Result<bool, io::Error> {
     let pids = linux_worker_processes(membership)?;
-    for pid in &pids {
-        if unsafe { libc::kill(*pid, libc::SIGKILL) } != 0 {
-            let error = io::Error::last_os_error();
-            if error.raw_os_error() != Some(libc::ESRCH) {
-                return Err(error);
-            }
-        }
-    }
-    for pid in &pids {
-        reap_linux_child(*pid)?;
+    kill_and_reap_linux_pids_with(&pids, kernel_kill, reap_linux_child)
+}
+
+#[cfg(target_os = "linux")]
+fn kill_and_reap_linux_pids_with(
+    pids: &[i32],
+    kill: impl FnMut(i32) -> Result<(), io::Error>,
+    mut reap: impl FnMut(i32) -> Result<(), io::Error>,
+) -> Result<bool, io::Error> {
+    kill_linux_pids(pids, kill)?;
+    for pid in pids {
+        reap(*pid)?;
     }
     Ok(!pids.is_empty())
 }
@@ -184,29 +193,47 @@ fn linux_entry_process_group(entry: std::fs::DirEntry) -> Result<Option<i32>, io
 
 #[cfg(target_os = "linux")]
 fn validate_linux_worker_boundary(membership: WorkerMembership) -> Result<(), io::Error> {
-    if unsafe { libc::geteuid() } != 0 {
-        return Err(io::Error::new(
-            io::ErrorKind::PermissionDenied,
-            "hosted worker containment requires a root supervisor",
-        ));
-    }
-    let identity = match membership {
+    validate_linux_worker_boundary_with(unsafe { libc::geteuid() }, membership, |membership| {
+        Ok(!linux_worker_processes(membership)?.is_empty())
+    })
+}
+
+#[cfg(target_os = "linux")]
+fn validate_linux_worker_boundary_with(
+    effective_uid: u32,
+    membership: WorkerMembership,
+    occupied: impl FnOnce(WorkerMembership) -> Result<bool, io::Error>,
+) -> Result<(), io::Error> {
+    validate_linux_supervisor(effective_uid)?;
+    validate_worker_membership(match membership {
         WorkerMembership::Uid(uid) => uid,
         WorkerMembership::SupplementaryGroup(group) => group,
-    };
-    if identity == 0 || identity == u32::MAX {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "hosted worker membership must be unprivileged",
-        ));
+    })?;
+    validate_linux_worker_availability(occupied(membership)?)
+}
+
+#[cfg(target_os = "linux")]
+fn validate_linux_supervisor(effective_uid: u32) -> Result<(), io::Error> {
+    if effective_uid != 0 {
+        Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "hosted worker containment requires a root supervisor",
+        ))
+    } else {
+        Ok(())
     }
-    if !linux_worker_processes(membership)?.is_empty() {
-        return Err(io::Error::new(
+}
+
+#[cfg(target_os = "linux")]
+fn validate_linux_worker_availability(occupied: bool) -> Result<(), io::Error> {
+    if occupied {
+        Err(io::Error::new(
             io::ErrorKind::AlreadyExists,
             "hosted worker membership is already in use",
-        ));
+        ))
+    } else {
+        Ok(())
     }
-    Ok(())
 }
 
 #[cfg(target_os = "linux")]
@@ -218,12 +245,18 @@ fn register_linux_subreaper() -> Result<(), io::Error> {
     if unsafe { libc::prctl(libc::PR_GET_CHILD_SUBREAPER, &mut enabled, 0, 0, 0) } != 0 {
         return Err(io::Error::last_os_error());
     }
-    if enabled != 1 {
-        return Err(io::Error::other(
+    validate_linux_subreaper(enabled)
+}
+
+#[cfg(target_os = "linux")]
+fn validate_linux_subreaper(enabled: libc::c_int) -> Result<(), io::Error> {
+    if enabled == 1 {
+        Ok(())
+    } else {
+        Err(io::Error::other(
             "Linux child subreaper could not be verified",
-        ));
+        ))
     }
-    Ok(())
 }
 
 #[cfg(target_os = "linux")]
@@ -243,10 +276,50 @@ struct CapabilityData {
 
 #[cfg(target_os = "linux")]
 fn configure_linux_worker(uid: u32, gid: u32, group: Option<u32>) -> Result<(), io::Error> {
-    close_control_descriptors()?;
-    drop_linux_identity(uid, gid, group)?;
-    clear_linux_privileges()?;
-    verify_linux_identity(uid, gid, group)
+    configure_linux_worker_with(&KernelWorkerSecurity, uid, gid, group)
+}
+
+#[cfg(target_os = "linux")]
+trait LinuxWorkerSecurity {
+    fn close_control_descriptors(&self) -> Result<(), io::Error>;
+    fn drop_identity(&self, uid: u32, gid: u32, group: Option<u32>) -> Result<(), io::Error>;
+    fn clear_privileges(&self) -> Result<(), io::Error>;
+    fn verify_identity(&self, uid: u32, gid: u32, group: Option<u32>) -> Result<(), io::Error>;
+}
+
+#[cfg(target_os = "linux")]
+struct KernelWorkerSecurity;
+
+#[cfg(target_os = "linux")]
+impl LinuxWorkerSecurity for KernelWorkerSecurity {
+    fn close_control_descriptors(&self) -> Result<(), io::Error> {
+        close_control_descriptors()
+    }
+
+    fn drop_identity(&self, uid: u32, gid: u32, group: Option<u32>) -> Result<(), io::Error> {
+        drop_linux_identity(uid, gid, group)
+    }
+
+    fn clear_privileges(&self) -> Result<(), io::Error> {
+        clear_linux_privileges()
+    }
+
+    fn verify_identity(&self, uid: u32, gid: u32, group: Option<u32>) -> Result<(), io::Error> {
+        verify_linux_identity(uid, gid, group)
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn configure_linux_worker_with(
+    security: &impl LinuxWorkerSecurity,
+    uid: u32,
+    gid: u32,
+    group: Option<u32>,
+) -> Result<(), io::Error> {
+    security.close_control_descriptors()?;
+    security.drop_identity(uid, gid, group)?;
+    security.clear_privileges()?;
+    security.verify_identity(uid, gid, group)
 }
 
 #[cfg(target_os = "linux")]
@@ -319,18 +392,28 @@ fn clear_linux_privileges() -> Result<(), io::Error> {
 fn verify_linux_identity(uid: u32, gid: u32, group: Option<u32>) -> Result<(), io::Error> {
     let mut observed_group = 0;
     // SAFETY: these calls only inspect the post-fork child credentials.
-    let valid = unsafe {
-        libc::getuid() == uid
-            && libc::geteuid() == uid
-            && libc::getgid() == gid
-            && libc::getegid() == gid
-            && match group {
-                Some(group) => {
-                    libc::getgroups(1, &mut observed_group) == 1 && observed_group == group
-                }
-                None => libc::getgroups(0, std::ptr::null_mut()) == 0,
-            }
+    let (observed_uid, observed_euid, observed_gid, observed_egid, observed_group_count) = unsafe {
+        (
+            libc::getuid(),
+            libc::geteuid(),
+            libc::getgid(),
+            libc::getegid(),
+            match group {
+                Some(_) => libc::getgroups(1, &mut observed_group),
+                None => libc::getgroups(0, std::ptr::null_mut()),
+            },
+        )
     };
+    let valid = linux_identity_matches(
+        (uid, gid, group),
+        (observed_uid, observed_euid, observed_gid, observed_egid),
+        (observed_group_count, observed_group),
+    );
+    validate_linux_identity_match(valid)
+}
+
+#[cfg(target_os = "linux")]
+fn validate_linux_identity_match(valid: bool) -> Result<(), io::Error> {
     if valid {
         Ok(())
     } else {
@@ -356,10 +439,26 @@ fn boolean_result(failed: bool) -> Result<(), io::Error> {
 
 #[cfg(target_os = "linux")]
 fn kill_linux_worker_processes(membership: WorkerMembership) -> Result<(), io::Error> {
-    for pid in linux_worker_processes(membership)? {
-        if unsafe { libc::kill(pid, libc::SIGKILL) } != 0 {
-            let error = io::Error::last_os_error();
-            if error.raw_os_error() != Some(libc::ESRCH) {
+    kill_linux_pids(&linux_worker_processes(membership)?, kernel_kill)
+}
+
+#[cfg(target_os = "linux")]
+fn kernel_kill(pid: i32) -> Result<(), io::Error> {
+    if unsafe { libc::kill(pid, libc::SIGKILL) } == 0 {
+        Ok(())
+    } else {
+        Err(io::Error::last_os_error())
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn kill_linux_pids(
+    pids: &[i32],
+    mut kill: impl FnMut(i32) -> Result<(), io::Error>,
+) -> Result<(), io::Error> {
+    for pid in pids {
+        if let Err(error) = kill(*pid) {
+            if !process_is_missing(&error) {
                 return Err(error);
             }
         }
@@ -369,18 +468,103 @@ fn kill_linux_worker_processes(membership: WorkerMembership) -> Result<(), io::E
 
 #[cfg(target_os = "linux")]
 fn reap_linux_child(pid: i32) -> Result<(), io::Error> {
+    reap_with(ReapTarget::Child, || {
+        waitpid_result(unsafe { libc::waitpid(pid, std::ptr::null_mut(), libc::WNOHANG) })
+    })
+}
+
+#[cfg(target_os = "linux")]
+fn reap_with(
+    target: ReapTarget,
+    mut wait: impl FnMut() -> Result<i32, io::Error>,
+) -> Result<(), io::Error> {
     loop {
-        let result = unsafe { libc::waitpid(pid, std::ptr::null_mut(), libc::WNOHANG) };
-        if result >= 0 {
-            return Ok(());
-        }
-        let error = io::Error::last_os_error();
-        match error.raw_os_error() {
-            Some(libc::ECHILD) | Some(libc::ESRCH) => return Ok(()),
-            Some(libc::EINTR) => {}
-            _ => return Err(error),
+        let result = wait();
+        match reap_action(
+            target,
+            result.as_ref().copied().unwrap_or(-1),
+            result.as_ref().err().and_then(|error| error.raw_os_error()),
+        ) {
+            ReapAction::Retry => {}
+            ReapAction::Complete => return Ok(()),
+            ReapAction::Fail => return Err(result.expect_err("failed waitpid has an OS error")),
         }
     }
+}
+
+#[cfg(target_os = "linux")]
+fn waitpid_result(result: i32) -> Result<i32, io::Error> {
+    if result < 0 {
+        Err(io::Error::last_os_error())
+    } else {
+        Ok(result)
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ReapTarget {
+    ProcessGroup,
+    Child,
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ReapAction {
+    Retry,
+    Complete,
+    Fail,
+}
+
+#[cfg(target_os = "linux")]
+fn reap_action(target: ReapTarget, result: i32, error: Option<i32>) -> ReapAction {
+    if result >= 0 {
+        return match (target, result) {
+            (ReapTarget::ProcessGroup, value) if value > 0 => ReapAction::Retry,
+            _ => ReapAction::Complete,
+        };
+    }
+    match error {
+        Some(libc::EINTR) => ReapAction::Retry,
+        Some(libc::ECHILD) => ReapAction::Complete,
+        Some(libc::ESRCH) if target == ReapTarget::Child => ReapAction::Complete,
+        _ => ReapAction::Fail,
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn process_is_missing(error: &io::Error) -> bool {
+    error.raw_os_error() == Some(libc::ESRCH)
+}
+
+#[cfg(target_os = "linux")]
+fn validate_worker_membership(identity: u32) -> Result<(), io::Error> {
+    if identity == 0 || identity == u32::MAX {
+        Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "hosted worker membership must be unprivileged",
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn linux_identity_matches(
+    expected: (u32, u32, Option<u32>),
+    observed_identity: (u32, u32, u32, u32),
+    observed_group: (i32, u32),
+) -> bool {
+    let (uid, gid, group) = expected;
+    let (observed_uid, observed_euid, observed_gid, observed_egid) = observed_identity;
+    observed_uid == uid
+        && observed_euid == uid
+        && observed_gid == gid
+        && observed_egid == gid
+        && match group {
+            Some(group) => observed_group == (1, group),
+            None => observed_group.0 == 0,
+        }
 }
 
 #[cfg(target_os = "linux")]
@@ -391,22 +575,38 @@ fn linux_worker_processes(membership: WorkerMembership) -> Result<Vec<i32>, io::
         let Some(pid) = linux_entry_pid(&entry) else {
             continue;
         };
-        let Some(status) =
-            resolve_linux_process_read(std::fs::read_to_string(entry.path().join("status")))?
+        let Some(matches) = linux_process_membership(
+            pid,
+            std::fs::read_to_string(entry.path().join("status")),
+            membership,
+        )?
         else {
             continue;
         };
-        let matches = linux_matches_membership(&status, membership).ok_or_else(|| {
-            io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("invalid Linux process status for {pid}"),
-            )
-        })?;
         if matches {
             pids.push(pid);
         }
     }
     Ok(pids)
+}
+
+#[cfg(target_os = "linux")]
+fn linux_process_membership(
+    pid: i32,
+    read: io::Result<String>,
+    membership: WorkerMembership,
+) -> io::Result<Option<bool>> {
+    let Some(status) = resolve_linux_process_read(read)? else {
+        return Ok(None);
+    };
+    linux_matches_membership(&status, membership)
+        .map(Some)
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("invalid Linux process status for {pid}"),
+            )
+        })
 }
 
 #[cfg(target_os = "linux")]

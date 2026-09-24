@@ -134,3 +134,7 @@ pub trait RunHistoryTransport: Send + Sync {
         request: RunHistoryRequest,
     ) -> Result<RunHistoryResponse, RunHistoryTransportError>;
 }
+
+#[cfg(test)]
+#[path = "run_history_transport/tests.rs"]
+mod tests;

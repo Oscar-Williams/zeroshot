@@ -10,8 +10,8 @@ mod json_read;
 use assert_value::AssertValue;
 use openengine_cluster_protocol::{
     ClaudeProvider, CodexProvider, ResolvedSource, RunId, RunListParams, RunListResult, RunSize,
-    RunStatus, RunStatusResult, RunSubmitParams, RunSubmitResult, RunTitle, SourceBranchId,
-    SourceRepositoryId, SourceRevisionId,
+    RunResumeParams, RunStatus, RunStatusResult, RunSubmitParams, RunSubmitResult, RunTitle,
+    SourceBranchId, SourceRepositoryId, SourceRevisionId,
 };
 use serde_json::{json, Value};
 
@@ -87,6 +87,52 @@ fn resolved_source_has_one_unambiguous_wire_shape() {
         }))
         .is_err()
     );
+}
+
+#[test]
+fn resolved_source_identifiers_enforce_git_and_host_boundaries() {
+    let repository =
+        SourceRepositoryId::new(format!("{}/{}", "a".repeat(100), "b".repeat(100))).assert_value();
+    assert_eq!(repository.as_str().len(), 201);
+    assert_eq!(repository.to_string(), repository.as_str());
+    for invalid in [
+        "owner",
+        "/name",
+        "owner/",
+        "owner/name/extra",
+        "owner name/repository",
+    ] {
+        assert!(
+            SourceRepositoryId::new(invalid).is_err(),
+            "accepted repository {invalid:?}"
+        );
+    }
+    assert!(SourceRepositoryId::new(format!("{}/name", "a".repeat(101))).is_err());
+
+    let branch = SourceBranchId::new("feature/coverage-v2").assert_value();
+    assert_eq!(branch.as_str(), "feature/coverage-v2");
+    for invalid in [
+        "",
+        "-main",
+        "main.",
+        "main/",
+        "main.lock",
+        "a..b",
+        "a@{b",
+        "a:b",
+        "a b",
+    ] {
+        assert!(
+            SourceBranchId::new(invalid).is_err(),
+            "accepted branch {invalid:?}"
+        );
+    }
+    assert!(SourceBranchId::new("a".repeat(256)).is_err());
+
+    let revision = SourceRevisionId::new("0123456789abcdef0123456789abcdef01234567").assert_value();
+    assert_eq!(revision.as_str().len(), 40);
+    assert!(SourceRevisionId::new("A".repeat(40)).is_err());
+    assert!(SourceRevisionId::new("a".repeat(39)).is_err());
 }
 
 #[test]
@@ -166,4 +212,23 @@ fn submit_and_list_results_expose_only_public_run_identity_and_status() {
         "run-1"
     );
     assert!(wire.to_string().find("capsule").is_none());
+}
+
+#[test]
+fn resume_debug_exposes_connection_names_but_redacts_credentials() {
+    let resume: RunResumeParams = serde_json::from_value(json!({
+        "runId": "run-1",
+        "successorRunId": "run-2",
+        "connections": {
+            "provider": {"API_KEY": "connection-secret"}
+        },
+        "githubToken": "github-secret"
+    }))
+    .assert_value();
+
+    let diagnostic = format!("{resume:?}");
+    assert!(diagnostic.contains("provider"));
+    assert!(diagnostic.contains("[REDACTED]"));
+    assert!(!diagnostic.contains("connection-secret"));
+    assert!(!diagnostic.contains("github-secret"));
 }

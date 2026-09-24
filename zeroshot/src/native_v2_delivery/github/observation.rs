@@ -143,3 +143,69 @@ async fn observe_ref(
     let wire: GitReferenceWire = super::api::decode_response(value, credential)?;
     reference_revision(wire, request.head_branch).map(Some)
 }
+
+#[cfg(all(test, unix))]
+pub(super) mod test_support {
+    use super::*;
+
+    pub(in crate::native_v2_delivery::github) const HEAD: &str =
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    pub(in crate::native_v2_delivery::github) const OTHER_HEAD: &str =
+        "cccccccccccccccccccccccccccccccccccccccc";
+
+    pub(in crate::native_v2_delivery::github) fn receipt() -> GitHubReviewReceipt {
+        GitHubReviewReceipt {
+            review_id: "17".to_owned(),
+            repository: "acme/project".to_owned(),
+            target_branch: "main".to_owned(),
+            head_branch: "zeroshot/v2-test".to_owned(),
+            head_revision: HEAD.to_owned(),
+        }
+    }
+
+    pub(in crate::native_v2_delivery::github) fn assert_retryable_api(
+        error: &GitHubAuthorityError,
+        context: &str,
+    ) {
+        assert!(matches!(error, GitHubAuthorityError::Api(_)));
+        assert!(error.retryable_operation());
+        assert!(error.to_string().contains(context));
+    }
+
+    #[cfg(unix)]
+    pub(in crate::native_v2_delivery::github) fn shell_literal(value: &str) -> String {
+        assert!(!value.contains('\''));
+        format!("'{value}'")
+    }
+
+    #[cfg(unix)]
+    pub(in crate::native_v2_delivery::github) fn write_executable(
+        program: &std::path::Path,
+        source: String,
+    ) {
+        use std::os::unix::fs::PermissionsExt;
+
+        std::fs::write(program, source).expect("fixture script must be writable");
+        std::fs::set_permissions(program, std::fs::Permissions::from_mode(0o700))
+            .expect("fixture script must be executable");
+    }
+
+    #[cfg(unix)]
+    pub(in crate::native_v2_delivery::github) fn authority(
+        program: std::path::PathBuf,
+        home: &std::path::Path,
+    ) -> GhCliDeliveryAuthority {
+        GhCliDeliveryAuthority::new(GhCliAuthorityConfig {
+            gh_program: program,
+            // Instrumented suites can briefly saturate process startup while running these
+            // otherwise immediate local fixtures in parallel. Keep the production deadline out
+            // of this test helper so a scheduler delay is not mistaken for an API failure.
+            api_deadline: std::time::Duration::from_secs(30),
+            ..GhCliAuthorityConfig::hosted(home.to_owned())
+        })
+    }
+}
+
+#[cfg(all(test, unix))]
+#[path = "observation/tests.rs"]
+mod tests;

@@ -8,7 +8,7 @@ use openengine_cluster_server::{
     graph_verifier::ProductionGraphVerifier,
     worker_registry::{WorkerRegistry, WorkerRegistryError},
 };
-use openengine_cluster_testkit::assertions::AssertValue;
+use openengine_cluster_testkit::assertions::{AssertError, AssertValue};
 use crate::full_v1_reducer::{
     FullV1Reducer, ReductionInput, Reduction, Decision, DurableExecution, DurableExecutionState,
     StructuralOccurrence, HistoryPosition, NodeInstanceId, ExecutionId, TerminalProjection,
@@ -29,6 +29,43 @@ fn done() -> Value {
 fn graph(children: Vec<Value>) -> Value {
     json!({"profile":"openengine.graph.full/v1","initialInput":record(json!({})),"policy":{"policy":"policy.native-v2@1","default":"deny"},"root":seq("run",children)})
 }
+fn named_item_type() -> Value {
+    record(json!({"name":{"type":{"kind":"string"},"required":true}}))
+}
+fn items_map(children: Vec<Value>, over: Value) -> Value {
+    json!({
+        "kind":"map", "name":"items_map", "state":record(json!({})),
+        "body":seq("body",children), "over":over, "maxItems":8,
+        "promotedStatePaths":[]
+    })
+}
+fn configured_item_map() -> Value {
+    let source = action(
+        graph(vec![items_map(vec![worker("draft")], Value::Null), done()]),
+        json!({
+            "kind":"run_input_field", "name":"items",
+            "type":{"kind":"array","items":named_item_type()}, "required":true
+        }),
+    )
+    .assert_value();
+    let source = action(
+        source,
+        json!({"kind":"map_collection","node":"items_map","source":{"kind":"run_input","path":["items"]}}),
+    )
+    .assert_value();
+    action(
+        source,
+        json!({"kind":"connect","target":{"node":"draft","input":"name"},"source":{"kind":"map_item","path":["name"]}}),
+    )
+    .assert_value()
+}
+fn incomplete_route(source: Value) -> Value {
+    graph(vec![
+        source,
+        worker("consumer"),
+        seq("unfinished", Vec::new()),
+    ])
+}
 fn action(graph: Value, action: Value) -> Result<Value, String> {
     let request = serde_json::from_value(
         json!({"graph":graph,"runtime":{"harness":"","nodes":{}},"action":action}),
@@ -39,6 +76,12 @@ fn action(graph: Value, action: Value) -> Result<Value, String> {
 }
 fn connect(graph: Value, source: &str, target: &str) -> Value {
     action(graph,json!({"kind":"connect","target":{"node":target,"input":"text"},"source":{"kind":"node_output","node":source,"channel":"out","path":["text"]}})).assert_value()
+}
+fn connect_to_consumer(source: &str) -> Value {
+    json!({
+        "kind":"connect", "target":{"node":"consumer","input":"value"},
+        "source":{"kind":"node_output","node":source,"channel":"out","path":["text"]}
+    })
 }
 fn protect(graph: Value, node: &str) -> Value {
     let request = serde_json::from_value(
@@ -240,8 +283,8 @@ fn adding_and_renaming_blank_run_input_preserves_node_fields() {
 
 #[test]
 fn collection_setup_supports_empty_map_drafts_and_item_fields() {
-    let items = record(json!({"name":{"type":{"kind":"string"},"required":true}}));
-    let map = json!({"kind":"map","name":"items_map","state":record(json!({})),"body":seq("body",Vec::new()),"over":{"source":"state","path":["missing"]},"maxItems":8,"promotedStatePaths":[]});
+    let items = named_item_type();
+    let map = items_map(Vec::new(), json!({"source":"state","path":["missing"]}));
     let source=action(graph(vec![map,done()]),json!({"kind":"run_input_field","name":"items","type":{"kind":"array","items":items},"required":true})).assert_value();
     let mut source=action(source,json!({"kind":"map_collection","node":"items_map","source":{"kind":"run_input","path":["items"]}})).assert_value();
     source["root"]["children"][0]["body"]["children"] = json!([worker("draft")]);
@@ -254,11 +297,8 @@ fn collection_setup_supports_empty_map_drafts_and_item_fields() {
 
 #[test]
 fn editing_run_collection_refreshes_item_types_and_clears_removed_sources() {
-    let map = json!({"kind":"map","name":"items_map","state":record(json!({})),"body":seq("body",vec![worker("draft")]),"over":null,"maxItems":8,"promotedStatePaths":[]});
-    let item = record(json!({"name":{"type":{"kind":"string"},"required":true}}));
-    let source = action(graph(vec![map, done()]),json!({"kind":"run_input_field","name":"items","type":{"kind":"array","items":item},"required":true})).assert_value();
-    let source = action(source,json!({"kind":"map_collection","node":"items_map","source":{"kind":"run_input","path":["items"]}})).assert_value();
-    let source = action(source,json!({"kind":"connect","target":{"node":"draft","input":"name"},"source":{"kind":"map_item","path":["name"]}})).assert_value();
+    let mut source = configured_item_map();
+    source["root"]["children"][0]["promotedStatePaths"] = json!([["items"]]);
     let new_item = record(json!({"name":{"type":{"kind":"boolean"},"required":true}}));
     let changed = action(source.clone(),json!({"kind":"run_input_field","before":"items","name":"attendees","type":{"kind":"array","items":new_item},"required":true})).assert_value();
     assert_eq!(
@@ -268,6 +308,10 @@ fn editing_run_collection_refreshes_item_types_and_clears_removed_sources() {
     assert_eq!(
         changed["root"]["children"][0]["body"]["children"][0]["input"]["fields"]["name"]["type"],
         json!({"kind":"boolean"})
+    );
+    assert_eq!(
+        changed["root"]["children"][0]["promotedStatePaths"],
+        json!([["attendees"]])
     );
     serde_json::from_value::<GraphSpec>(changed).assert_value();
     let removed_item = action(source.clone(),json!({"kind":"run_input_field","before":"items","name":"items","type":{"kind":"array","items":record(json!({}))},"required":true})).assert_value();
@@ -640,6 +684,36 @@ fn feedback_reuse_rejects_missing_returns_optional_state_and_competing_write_pat
 }
 
 #[test]
+fn feedback_reuse_rejects_invalid_donors_mappings_and_changed_output_types() {
+    for damage in 0..4 {
+        let mut source = feedback_fixture();
+        match damage {
+            0 => source["root"]["children"][0]["body"]["children"][0]["kind"] = json!("succeed"),
+            1 => {
+                let binding = source["root"]["children"][0]["body"]["children"][0]["inputBindings"]
+                    [0]
+                .clone();
+                source["root"]["children"][0]["body"]["children"][0]["inputBindings"] =
+                    json!([binding.clone(), binding])
+            }
+            2 => {
+                source["root"]["children"][0]["body"]["children"][0]["inputBindings"][0]["target"] =
+                    json!(["feedback", "nested"])
+            }
+            3 => {
+                source["root"]["children"][0]["body"]["children"][2]["output"]["fields"]["text"]["type"] =
+                    json!({"kind":"number"})
+            }
+            _ => unreachable!(),
+        }
+        assert!(
+            reuse_feedback(source).is_err(),
+            "damage {damage} must reject"
+        );
+    }
+}
+
+#[test]
 fn feedback_reuse_rejects_an_uninitialized_type_and_accepts_a_real_caller_initial_value() {
     let mut source = feedback_fixture();
     let nodes = index(&source).assert_value();
@@ -776,4 +850,469 @@ fn incomplete_other_groups_defer_required_output_protection_without_fabricating_
         get(&connected, &nodes, "read").assert_value()["inputBindings"][0]["value"]["path"],
         json!(["__ui_data_1"])
     );
+}
+
+fn assert_action_error(graph: Value, action_value: Value, expected: &str) {
+    let error = action(graph, action_value).err().assert_value();
+    assert!(
+        error.contains(expected),
+        "expected {expected:?}, got {error:?}"
+    );
+}
+
+#[test]
+fn malformed_node_inventories_fail_closed_before_data_authoring() {
+    let remove = |node: &str| json!({"kind":"remove_input","target":{"node":node,"input":"text"}});
+
+    let mut missing_name = graph(vec![worker("draft"), done()]);
+    missing_name["root"]["children"][0]
+        .as_object_mut()
+        .assert_value()
+        .remove("name");
+    assert_action_error(missing_name, remove("draft"), "A node has no name");
+
+    let mut missing_kind = graph(vec![worker("draft"), done()]);
+    missing_kind["root"]["children"][0]
+        .as_object_mut()
+        .assert_value()
+        .remove("kind");
+    assert_action_error(missing_kind, remove("draft"), "A node has no type");
+
+    assert_action_error(
+        graph(vec![worker("duplicate"), worker("duplicate"), done()]),
+        remove("duplicate"),
+        "Node names must be unique",
+    );
+    let mut invalid_name = graph(vec![worker("draft"), done()]);
+    invalid_name["root"]["children"][0]["name"] = json!("bad/name");
+    assert_action_error(invalid_name, remove("draft"), "invalid characters");
+}
+
+#[test]
+fn invalid_data_sources_and_mappings_report_their_specific_contract_failure() {
+    let remove = |node: &str| json!({"kind":"remove_input","target":{"node":node,"input":"text"}});
+
+    assert_action_error(
+        graph(vec![worker("draft"), done()]),
+        json!({
+            "kind":"map_collection", "node":"draft",
+            "source":{"kind":"run_input","path":["items"]}
+        }),
+        "Select a map",
+    );
+    let map = || {
+        json!({
+            "kind":"map", "name":"items_map", "state":record(json!({})),
+            "body":seq("body", vec![worker("inside")]), "over":null,
+            "maxItems":8, "promotedStatePaths":[]
+        })
+    };
+    let mut scalar_collection = graph(vec![map(), done()]);
+    scalar_collection["initialInput"] = record(json!({
+        "items":{"type":{"kind":"string"},"required":true}
+    }));
+    assert_action_error(
+        scalar_collection,
+        json!({
+            "kind":"map_collection", "node":"items_map",
+            "source":{"kind":"run_input","path":["items"]}
+        }),
+        "Select a list",
+    );
+
+    for (path, field, expected) in [
+        (json!([]), None, "Select a named field"),
+        (
+            json!(["optional"]),
+            Some(json!({"optional":{"type":{"kind":"string"},"required":false}})),
+            "selected output must be required",
+        ),
+        (
+            json!(["missing"]),
+            Some(json!({"present":{"type":{"kind":"string"},"required":true}})),
+            "selected field no longer exists",
+        ),
+    ] {
+        let mut source = graph(vec![worker("draft"), done()]);
+        if let Some(fields) = field {
+            source["initialInput"] = record(fields);
+        }
+        assert_action_error(
+            source,
+            json!({
+                "kind":"connect", "target":{"node":"draft","input":"text"},
+                "source":{"kind":"run_input","path":path}
+            }),
+            expected,
+        );
+    }
+
+    assert_action_error(
+        graph(vec![worker("draft"), done()]),
+        json!({
+            "kind":"connect", "target":{"node":"draft","input":"text"},
+            "source":{"kind":"map_item","path":["text"]}
+        }),
+        "inside a map",
+    );
+    assert_action_error(
+        graph(vec![map(), done()]),
+        json!({
+            "kind":"connect", "target":{"node":"inside","input":"text"},
+            "source":{"kind":"map_item","path":["text"]}
+        }),
+        "Configure the map list first",
+    );
+
+    assert_action_error(
+        graph(vec![worker("draft"), done()]),
+        remove("run"),
+        "Select an agent input or run result",
+    );
+    let mut scalar_input = graph(vec![worker("draft"), done()]);
+    scalar_input["root"]["children"][0]["input"] = json!({"kind":"string"});
+    assert_action_error(
+        scalar_input,
+        remove("draft"),
+        "This input uses a scalar schema",
+    );
+    let mut invalid_mappings = graph(vec![worker("draft"), done()]);
+    invalid_mappings["root"]["children"][0]["inputBindings"] = json!({});
+    assert_action_error(invalid_mappings, remove("draft"), "Invalid data mappings");
+}
+
+#[test]
+fn output_routes_reject_ambiguous_or_conditionally_available_values() {
+    let incomplete = || seq("unfinished", Vec::new());
+    let error_guard = || {
+        json!({
+            "kind":"in", "value":{"name":"missing","source":"error","field":null},
+            "labels":["crash"]
+        })
+    };
+    let ambiguous = seq("producers", vec![worker("first"), worker("second")]);
+    assert_action_error(
+        graph(vec![ambiguous, worker("consumer"), incomplete()]),
+        connect_to_consumer("producers"),
+        "Select an unambiguous producing node",
+    );
+
+    let failed = json!({"kind":"fail","name":"failed","reason":"failed"});
+    let terminal_choice = json!({
+        "kind":"choice", "name":"finished", "state":record(json!({})),
+        "branches":[{"when":error_guard(),"node":failed}],
+        "otherwise":done(), "promotedStatePaths":[]
+    });
+    assert_action_error(
+        graph(vec![terminal_choice, worker("consumer"), incomplete()]),
+        connect_to_consumer("finished"),
+        "This decision has no continuing output",
+    );
+
+    let branch_map = json!({
+        "kind":"map", "name":"mapped", "state":record(json!({})),
+        "body":worker("mapped_value"), "over":null, "maxItems":2,
+        "promotedStatePaths":[]
+    });
+    let differently_shaped = json!({
+        "kind":"choice", "name":"shapes", "state":record(json!({})),
+        "branches":[{"when":error_guard(),"node":branch_map}],
+        "otherwise":worker("scalar_value"), "promotedStatePaths":[]
+    });
+    assert_action_error(
+        graph(vec![differently_shaped, worker("consumer"), incomplete()]),
+        connect_to_consumer("shapes"),
+        "Selected outputs have different collection shapes",
+    );
+
+    let conditional = json!({
+        "kind":"choice", "name":"conditional", "state":record(json!({})),
+        "branches":[{"when":error_guard(),"node":worker("selected")}],
+        "otherwise":worker("other"), "promotedStatePaths":[]
+    });
+    assert_action_error(
+        graph(vec![conditional, worker("consumer"), incomplete()]),
+        connect_to_consumer("selected"),
+        "Select a common decision output",
+    );
+}
+
+#[test]
+fn output_routes_reject_incomplete_groups_late_values_and_type_mismatches() {
+    let incomplete = || seq("unfinished", Vec::new());
+    let not_joined = json!({
+        "kind":"par", "name":"race", "state":record(json!({})),
+        "branches":[worker("winner"), worker("peer")],
+        "join":{"kind":"any"}, "promotedStatePaths":[]
+    });
+    assert_action_error(
+        graph(vec![not_joined, worker("consumer"), incomplete()]),
+        connect_to_consumer("winner"),
+        "Select an output from a completed group",
+    );
+
+    assert_action_error(
+        graph(vec![worker("consumer"), worker("later"), incomplete()]),
+        connect_to_consumer("later"),
+        "Select an earlier output",
+    );
+
+    let mut number = worker("number");
+    number["output"]["fields"]["text"]["type"] = json!({"kind":"number"});
+    let incompatible = json!({
+        "kind":"choice", "name":"incompatible", "state":record(json!({})),
+        "branches":[{"when":{
+            "kind":"in", "value":{"name":"missing","source":"error","field":null},
+            "labels":["crash"]
+        },"node":worker("text")}],
+        "otherwise":number, "promotedStatePaths":[]
+    });
+    assert_action_error(
+        graph(vec![incompatible, worker("consumer"), incomplete()]),
+        connect_to_consumer("incompatible"),
+        "Decision outputs must have matching types",
+    );
+}
+
+#[test]
+fn removing_a_run_collection_disconnects_only_its_dependent_map_data() {
+    let mut source = configured_item_map();
+    source["root"]["children"][0]["promotedStatePaths"] = json!([["items"], ["unrelated"]]);
+    let draft = &mut source["root"]["children"][0]["body"]["children"][0];
+    draft["input"]["fields"]["constant"] = json!({"type":{"kind":"string"},"required":true});
+    draft["inputBindings"]
+        .as_array_mut()
+        .assert_value()
+        .push(json!({"target":["constant"],"value":{"source":"input","path":["constant"]}}));
+
+    let removed = action(source, json!({"kind":"remove_run_input","name":"items"})).assert_value();
+    let map = &removed["root"]["children"][0];
+    assert!(map["over"].is_null());
+    assert_eq!(map["promotedStatePaths"], json!([["unrelated"]]));
+    let bindings = map["body"]["children"][0]["inputBindings"]
+        .as_array()
+        .assert_value();
+    assert_eq!(bindings.len(), 1);
+    assert_eq!(bindings[0]["target"], json!(["constant"]));
+}
+
+#[test]
+fn map_item_and_channel_routes_fail_at_their_specific_boundary() {
+    let map = |state: Value, over: Value| {
+        json!({
+            "kind":"map", "name":"items_map", "state":state,
+            "body":seq("body", vec![worker("inside")]), "over":over,
+            "maxItems":8, "promotedStatePaths":[]
+        })
+    };
+    let item_action = json!({
+        "kind":"connect", "target":{"node":"inside","input":"item"},
+        "source":{"kind":"map_item","path":["name"]}
+    });
+
+    assert_action_error(
+        graph(vec![
+            map(record(json!({})), json!({"source":"item","path":["name"]})),
+            done(),
+        ]),
+        item_action.clone(),
+        "Configure the map list first",
+    );
+    assert_action_error(
+        graph(vec![
+            map(
+                record(json!({"items":{"type":{"kind":"string"},"required":true}})),
+                json!({"source":"state","path":["items"]}),
+            ),
+            done(),
+        ]),
+        item_action,
+        "Configure the map list first",
+    );
+
+    for (channel, path, expected) in [
+        (
+            "signal",
+            json!(["verdict"]),
+            "Select an output from this node",
+        ),
+        (
+            "diagnostic",
+            json!(["message"]),
+            "Select an output from this node",
+        ),
+    ] {
+        assert_action_error(
+            incomplete_route(worker("source")),
+            json!({
+                "kind":"connect", "target":{"node":"consumer","input":"value"},
+                "source":{"kind":"node_output","node":"source","channel":channel,"path":path}
+            }),
+            expected,
+        );
+    }
+
+    let mut verifier = worker("verifier");
+    verifier["kind"] = json!("verifier");
+    verifier["signals"] = json!({"verdict":["accepted"]});
+    verifier["diagnostic"] = record(json!({}));
+    assert_action_error(
+        incomplete_route(verifier),
+        json!({
+            "kind":"connect", "target":{"node":"consumer","input":"value"},
+            "source":{"kind":"node_output","node":"verifier","channel":"signal","path":["missing"]}
+        }),
+        "The selected outcome no longer exists",
+    );
+}
+
+#[test]
+fn run_input_rewrites_reject_collisions_and_stale_nested_bindings() {
+    let request_type = record(json!({
+        "detail":{"type":{"kind":"string"},"required":true}
+    }));
+    let source = action(
+        graph(vec![worker("consumer"), done()]),
+        json!({
+            "kind":"run_input_field", "name":"request", "type":request_type,
+            "required":true
+        }),
+    )
+    .assert_value();
+    let source = action(
+        source,
+        json!({
+            "kind":"connect", "target":{"node":"consumer","input":"detail"},
+            "source":{"kind":"run_input","path":["request","detail"]}
+        }),
+    )
+    .assert_value();
+    assert_action_error(
+        source.clone(),
+        json!({"kind":"run_input_field","before":"request","name":"request","type":record(json!({})),"required":true}),
+        "A connected field no longer exists",
+    );
+
+    let mut malformed_path = source.clone();
+    malformed_path["root"]["children"][0]["inputBindings"][0]["value"]["path"] =
+        json!(["request", 1]);
+    assert_action_error(
+        malformed_path,
+        json!({"kind":"run_input_field","before":"request","name":"request","type":record(json!({})),"required":true}),
+        "Invalid connected input",
+    );
+
+    let with_other = action(
+        source.clone(),
+        json!({"kind":"run_input_field","name":"other","type":{"kind":"string"},"required":true}),
+    )
+    .assert_value();
+    assert_action_error(
+        with_other,
+        json!({"kind":"run_input_field","before":"request","name":"other","type":{"kind":"string"},"required":true}),
+        "That input name already exists",
+    );
+
+    let mut malformed_write = source;
+    malformed_write["root"]["children"][0]["writeBindings"] = json!([{
+        "target":{}, "value":{"node":"consumer","channel":"out","path":["text"]}
+    }]);
+    assert_action_error(
+        malformed_write,
+        json!({"kind":"remove_run_input","name":"request"}),
+        "This input is also authored as writable state",
+    );
+}
+
+#[test]
+fn structural_helpers_keep_empty_decisions_and_terminal_groups_fail_closed() {
+    let empty_choice = json!({"kind":"choice","name":"route","branches":[]});
+    assert!(!structurally_complete(&empty_choice));
+    assert!(!can_continue(&done()));
+    assert!(!can_continue(&seq("terminal", vec![done()])));
+
+    let document = graph(vec![worker("source"), worker("consumer"), done()]);
+    let nodes = index(&document).assert_value();
+    assert!(previous_round_route(&nodes, "source", "source").assert_value());
+
+    let verifier = json!({
+        "kind":"verifier",
+        "name":"review",
+        "output":record(json!({})),
+        "diagnostic":record(json!({"summary":{"type":{"kind":"string"},"required":true}})),
+        "signals":{"decision":["accept","revise"]}
+    });
+    let signal = producers(&verifier, Channel::Signal, &["decision".to_owned()]).assert_value();
+    assert_eq!(
+        signal[0].value_type,
+        json!({"kind":"enum","values":["accept","revise"]})
+    );
+    assert_eq!(
+        producers(
+            &seq("group", vec![worker("nested")]),
+            Channel::Diagnostic,
+            &[]
+        )
+        .assert_error()
+        .message,
+        "Select an output."
+    );
+}
+
+#[test]
+fn input_mutation_helpers_update_null_results_atomically_and_reject_type_collisions() {
+    let mut document = graph(vec![done()]);
+    let nodes = index(&document).assert_value();
+    set_input(
+        &mut document,
+        &nodes,
+        InputEdit {
+            node: "done",
+            input: "result",
+            value_type: json!({"kind":"string"}),
+            selector: json!({"source":"input","path":["request"]}),
+        },
+    )
+    .assert_value();
+    let result = get(&document, &nodes, "done").assert_value();
+    assert_eq!(result["output"]["kind"], "record");
+    assert_eq!(result["bindings"].as_array().map(Vec::len), Some(1));
+
+    remove_input(&mut document, &nodes, "done", "result").assert_value();
+    let result = get(&document, &nodes, "done").assert_value();
+    assert!(
+        result["output"]["fields"]
+            .as_object()
+            .assert_value()
+            .is_empty()
+    );
+    assert!(result["bindings"].as_array().assert_value().is_empty());
+
+    let mut missing = json!({});
+    array_mut(&mut missing, "bindings")
+        .assert_value()
+        .push(json!({"target":["result"]}));
+    assert_eq!(missing["bindings"].as_array().map(Vec::len), Some(1));
+
+    let mut group = seq("scope", vec![done()]);
+    add_field(
+        &mut group,
+        "shared",
+        json!({"type":{"kind":"string"},"required":false}),
+    )
+    .assert_value();
+    assert_eq!(
+        add_field(
+            &mut group,
+            "shared",
+            json!({"type":{"kind":"null"},"required":false}),
+        )
+        .assert_error()
+        .message,
+        "An existing field has a different type."
+    );
+    assert!(state_path_written(
+        &json!({"root":null}),
+        &["shared".to_owned()]
+    ));
 }

@@ -140,54 +140,5 @@ fn direct_identity() -> ConnectionIdentity {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use openengine_cluster_testkit::assertions::AssertValue;
-
-    struct Storage(std::path::PathBuf);
-
-    impl Drop for Storage {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.0);
-        }
-    }
-
-    #[tokio::test]
-    async fn relative_storage_has_an_initialized_ledger_before_accepting_connections() {
-        let storage = Storage(
-            std::path::PathBuf::from("target")
-                .join(format!("target-serve-{}", uuid::Uuid::now_v7())),
-        );
-        let config = TargetServe {
-            listen: "127.0.0.1:0".parse().assert_value(),
-            public_origin: "http://127.0.0.1:8080".to_owned(),
-            storage: storage.0.clone(),
-            bootstrap_key_file: None,
-        };
-        let (server, listener) = prepare_server(&config, &config.public_origin)
-            .await
-            .assert_value();
-        assert!(storage.0.join("runs.sqlite3").is_file());
-        let ledger = zeroshot_engine::v2_run_ledger::sqlite::SqliteRunLedger::open_read_only(
-            storage.0.join("runs.sqlite3"),
-        )
-        .assert_value();
-        use zeroshot_engine::v2_run_ledger::RunLedger;
-        assert!(ledger.list().await.assert_value().is_empty());
-        drop(ledger);
-        drop(listener);
-        drop(server);
-    }
-
-    #[test]
-    fn target_serve_derives_only_same_authority_websocket_endpoints() {
-        assert_eq!(
-            oecp_endpoint("http://127.0.0.1:8080").assert_value(),
-            "ws://127.0.0.1:8080/native-v2/oecp"
-        );
-        assert_eq!(
-            oecp_endpoint("https://target.example").assert_value(),
-            "wss://target.example/native-v2/oecp"
-        );
-    }
-}
+#[path = "serve/tests.rs"]
+mod tests;

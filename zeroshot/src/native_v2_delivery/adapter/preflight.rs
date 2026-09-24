@@ -511,3 +511,7 @@ pub(super) fn receipt_from_observation(review: &GitHubReviewObservation) -> GitH
         head_revision: review.head_revision.clone(),
     }
 }
+
+#[cfg(test)]
+#[path = "preflight/tests.rs"]
+mod tests;

@@ -1,6 +1,23 @@
 use super::*;
 
 #[test]
+fn issue_contract_accessors_preserve_canonical_identity_and_public_evidence() {
+    let reference = issue_ref("issue.linear", 1);
+    let resolved = resolved_linear_issue(reference.clone());
+    assert_eq!(resolved.issue().as_str(), "ENG-7");
+    assert_eq!(resolved.state(), IssueState::Open);
+    assert!(resolved.public_urls().is_empty());
+
+    let resolve = issue_resolve_request(reference.clone());
+    assert_eq!(resolve.credential_handle().as_str(), "linear-lease");
+
+    let close = issue_close_request(reference);
+    let receipt = issue_close_receipt(&close);
+    assert_eq!(receipt.state(), IssueClosedState::Closed);
+    assert!(receipt.public_urls().is_empty());
+}
+
+#[test]
 fn source_registry_exact_lookup_and_errors_are_deterministic() {
     let reference = source_ref("source.github", 1);
     let provider = Arc::new(FakeSourceProvider::new(
@@ -100,6 +117,60 @@ fn issue_registry_exact_lookup_and_errors_are_deterministic() {
             profile: IssueProfileId::new("staging").assert_value(),
         }
     );
+
+    assert_eq!(
+        registry
+            .descriptor(&issue_ref("issue.github", 1))
+            .assert_error(),
+        IssueRegistryError::UnknownProvider {
+            id: IssueProviderId::new("issue.github").assert_value(),
+        }
+    );
+    assert_eq!(
+        registry
+            .descriptor(&issue_ref("issue.linear", 2))
+            .assert_error(),
+        IssueRegistryError::UnavailableVersion {
+            provider: issue_ref("issue.linear", 2),
+        }
+    );
+}
+
+#[tokio::test]
+async fn issue_registry_rejects_provider_identity_substitution_at_every_effect_boundary() {
+    let reference = issue_ref("issue.linear", 1);
+    let provider = Arc::new(
+        FakeIssueProvider::new(
+            issue_descriptor(
+                reference.clone(),
+                [IssueCapability::Read, IssueCapability::Close],
+                [],
+            ),
+            IssueCloseInspection::Unobserved,
+        )
+        .with_mismatched_evidence(),
+    );
+    let mut registry = IssueProviderRegistry::new();
+    registry.register(provider.clone()).assert_value();
+
+    let resolve = issue_resolve_request(reference.clone());
+    assert!(matches!(
+        registry.resolve(&resolve).await,
+        Err(IssueCallError::InvalidEvidence { .. })
+    ));
+
+    let close = issue_close_request(reference);
+    assert_eq!(
+        registry.inspect_close(&close).await.assert_value(),
+        IssueCloseInspection::Unobserved
+    );
+    assert!(matches!(
+        registry.close(&close).await,
+        Err(IssueCallError::InvalidEvidence { .. })
+    ));
+    assert_eq!(provider.resolve_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(provider.inspect_calls.load(Ordering::SeqCst), 2);
+    assert_eq!(provider.close_calls.load(Ordering::SeqCst), 1);
 }
 
 #[tokio::test]
@@ -420,18 +491,7 @@ async fn linear_issue_close_is_gated_by_github_merge_receipt() {
     let mut issues = IssueProviderRegistry::new();
     issues.register(issue.clone()).assert_value();
     let resolved = issues
-        .resolve(
-            &IssueResolveRequest::new(
-                issue_reference.clone(),
-                issue_profile(),
-                (
-                    IssueAccountId::new("open-engine-linear").assert_value(),
-                    IssueCredentialHandleId::new("linear-lease").assert_value(),
-                ),
-                IssueReference::new("ENG-7").assert_value(),
-            )
-            .assert_value(),
-        )
+        .resolve(&issue_resolve_request(issue_reference.clone()))
         .await
         .assert_value();
     let close_request = IssueCloseRequest::new(

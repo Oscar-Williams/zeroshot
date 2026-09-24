@@ -44,3 +44,7 @@ impl TailBuffer {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "tail_buffer/tests.rs"]
+mod tests;

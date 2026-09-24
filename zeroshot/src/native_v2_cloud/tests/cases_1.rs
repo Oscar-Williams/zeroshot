@@ -5,6 +5,37 @@ struct RetainedCleanupFailureAllocator {
     cleanup_calls: StdMutex<Vec<(RunId, RunRuntimeExit)>>,
 }
 
+async fn assert_reconstructed_discard_contracts(
+    controller: &NativeV2CloudController,
+    successor_run_id: RunId,
+) {
+    assert!(matches!(
+        controller
+            .discard_workspace(RunDiscardWorkspaceParams {
+                run_id: RunId::new("missing-run"),
+            })
+            .await,
+        Err(NativeV2CloudError::Ledger(RunLedgerError::RunNotFound))
+    ));
+    assert!(matches!(
+        controller
+            .checkpoints(openengine_cluster_protocol::RunCheckpointsParams {
+                run_id: RunId::new("missing-run"),
+                after: None,
+                limit: None,
+            })
+            .await,
+        Err(NativeV2CloudError::Ledger(RunLedgerError::RunNotFound))
+    ));
+    let discarded = controller
+        .discard_workspace(RunDiscardWorkspaceParams {
+            run_id: successor_run_id,
+        })
+        .await
+        .assert_value_with("workspace discard");
+    assert!(!discarded.discarded);
+}
+
 impl RetainedCleanupFailureAllocator {
     fn new() -> Self {
         Self {
@@ -72,8 +103,12 @@ impl CapsuleAllocator for RetainedCleanupFailureAllocator {
 }
 
 #[tokio::test]
-async fn invalid_submission_has_no_durable_or_allocation_effect() {
+async fn wave8_cli_contract_submission_rejects_missing_secrets_and_invalid_graphs_before_effects() {
     let harness = harness(Behavior::Complete).await;
+    assert!(matches!(
+        harness.controller.submit(request(Value::Null)).await,
+        Err(NativeV2CloudError::Environment(_))
+    ));
     assert!(matches!(
         submit_test_request(&harness.controller, request(json!({}))).await,
         Err(NativeV2CloudError::Admission(_))
@@ -87,6 +122,27 @@ async fn invalid_submission_has_no_durable_or_allocation_effect() {
             .assert_value_with("list")
             .is_empty()
     );
+
+    let submission = request(Value::Null).submission;
+    let admitted = NativeV2Admission
+        .admit(submission)
+        .await
+        .assert_value_with("admitted resolver fixture");
+    let error = resume_secret_envelope(ResumeSecretRequest {
+        admitted: &admitted,
+        successor_run_id: &RunId::new("resolver-successor"),
+        connections: BTreeMap::new(),
+        connection_resolver: Some(openengine_cluster_protocol::TargetConnectionResolver {
+            endpoint: "http://resolver.example".to_owned(),
+            bearer_token: "private-token".to_owned(),
+            keys: vec![ConnectionKey::new("test").assert_value_with("resolver key")],
+            source_connection: None,
+        }),
+        github_token: None,
+    })
+    .err()
+    .expect("insecure resolver authority must fail closed");
+    assert!(matches!(error, NativeV2CloudError::ResumeCredentials));
 }
 
 #[tokio::test]
@@ -122,7 +178,7 @@ async fn startup_reconciles_every_persisted_nonterminal_before_status_is_visible
 }
 
 #[tokio::test]
-async fn unconfirmed_retained_cleanup_stays_nonterminal_until_reconstruction() {
+async fn wave8_cli_contract_retained_cleanup_and_discard_fail_closed_across_reconstruction() {
     let ledger = Arc::new(FakeRunLedger::new());
     let source_run_id = seed_controller_reconstructed_run(&ledger, "resume-source").await;
     let source = ledger
@@ -184,7 +240,7 @@ async fn unconfirmed_retained_cleanup_stays_nonterminal_until_reconstruction() {
     );
     let status = replacement
         .status(RunStatusParams {
-            run_id: successor_run_id,
+            run_id: successor_run_id.clone(),
         })
         .await
         .assert_value_with("reconciled successor status");
@@ -196,6 +252,8 @@ async fn unconfirmed_retained_cleanup_stays_nonterminal_until_reconstruction() {
         } if reason.as_str() == "runtime_lost"
     ));
     assert!(status.workspace_recovery.recoverable);
+
+    assert_reconstructed_discard_contracts(&replacement, successor_run_id).await;
 }
 
 #[tokio::test]

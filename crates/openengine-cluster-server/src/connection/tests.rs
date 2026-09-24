@@ -1,10 +1,17 @@
 use std::collections::HashSet;
 
-use openengine_cluster_protocol::RunId;
+use openengine_cluster_protocol::{RunId, INVALID_PARAMS, INVALID_PHASE, SCHEMA_VIOLATION};
+use serde_json::json;
 
 use super::*;
+use crate::agent_attach::fixtures::{AgentAttachFixtureBackend, AgentAttachFixtureStore};
 use crate::watch::fixtures::{FixtureBackend, FixtureStore};
 use crate::ConnectionContext;
+
+fn fixture_dispatcher() -> Dispatcher<FixtureBackend> {
+    let store = Arc::new(FixtureStore::new(RunId::new("run-1"), Vec::new(), 8));
+    Dispatcher::new(FixtureBackend::new(store), ConnectionContext::default())
+}
 
 /// Regression test for a race where `run_watch_subscription` sent the `watch` response before
 /// registering the subscription's `WatchHandle` in `subscriptions`: a `subscription/cancel`
@@ -14,8 +21,7 @@ use crate::ConnectionContext;
 /// asserts registration has already happened — true only when the insert precedes the send.
 #[tokio::test]
 async fn subscription_is_registered_before_its_response_send_can_complete() {
-    let store = Arc::new(FixtureStore::new(RunId::new("run-1"), Vec::new(), 8));
-    let dispatcher = Dispatcher::new(FixtureBackend::new(store), ConnectionContext::default());
+    let dispatcher = fixture_dispatcher();
 
     let (outbound_tx, mut outbound_rx) = mpsc::channel::<String>(1);
     assert!(outbound_tx.send("occupied".to_owned()).await.is_ok());
@@ -27,7 +33,7 @@ async fn subscription_is_registered_before_its_response_send_can_complete() {
         in_flight_ids: Arc::new(Mutex::new(HashSet::new())),
     };
 
-    tokio::spawn(run_watch_subscription(
+    let task = tokio::spawn(run_watch_subscription(
         dispatcher,
         RequestId::Integer(1),
         Value::Object(serde_json::Map::new()),
@@ -54,4 +60,177 @@ async fn subscription_is_registered_before_its_response_send_can_complete() {
     // Drain the queue so the parked task can finish instead of leaking past the test.
     let _ = outbound_rx.recv().await;
     let _ = outbound_rx.recv().await;
+    let cancel = subscriptions.lock().values().next().cloned();
+    assert!(
+        cancel.is_some(),
+        "established subscription must be cancellable"
+    );
+    if let Some(cancel) = cancel {
+        cancel.notify_one();
+    }
+    assert!(
+        task.await.is_ok(),
+        "subscription task must terminate cleanly"
+    );
+    assert!(subscriptions.lock().is_empty());
+}
+
+#[tokio::test]
+async fn agent_attach_dispatch_rejects_bad_params_before_backend_effects() {
+    let invalid = fixture_dispatcher()
+        .dispatch_agent_attach(RequestId::Integer(40), json!({}))
+        .await;
+    assert!(invalid.1.is_none());
+    let invalid: Value = serde_json::from_str(&invalid.0).unwrap();
+    assert_eq!(invalid.pointer("/error/code"), Some(&json!(INVALID_PARAMS)));
+    assert_eq!(
+        invalid.pointer("/error/data/code"),
+        Some(&json!(SCHEMA_VIOLATION))
+    );
+}
+
+#[tokio::test]
+async fn agent_attach_connection_encodes_live_events_and_slow_consumer_close() {
+    let store = Arc::new(AgentAttachFixtureStore::new());
+    let execution: openengine_cluster_protocol::ExecutionRef =
+        serde_json::from_str("\"execution-1\"").unwrap();
+    store.register_active(execution.clone()).await;
+    let dispatcher = Dispatcher::new(
+        AgentAttachFixtureBackend::new(Arc::clone(&store)),
+        ConnectionContext::default(),
+    );
+    let (outbound_tx, mut outbound_rx) = mpsc::channel::<String>(2);
+    let ConnectionSetup { state, .. } = new_connection_setup(&outbound_tx);
+    let id = RequestId::Integer(41);
+    state.in_flight_ids.lock().insert(id.clone());
+
+    let task = tokio::spawn(agent_attach::run_agent_attach_subscription(
+        dispatcher,
+        id,
+        json!({"execution": "execution-1"}),
+        state.clone(),
+    ));
+    let response: Value = serde_json::from_str(&outbound_rx.recv().await.unwrap()).unwrap();
+    assert_eq!(
+        response.pointer("/result/subscriptionId"),
+        Some(&json!("sub-1"))
+    );
+
+    store
+        .publish(
+            &execution,
+            openengine_cluster_protocol::AgentAttachEvent::Working {},
+        )
+        .await;
+    let notification: Value = serde_json::from_str(&outbound_rx.recv().await.unwrap()).unwrap();
+    assert_eq!(notification.pointer("/method"), Some(&json!("event")));
+    assert_eq!(
+        notification.pointer("/params/event/type"),
+        Some(&json!("working"))
+    );
+
+    for _ in 0..=(openengine_cluster_protocol::DEFAULT_SUBSCRIPTION_QUEUE_CAPACITY * 2) {
+        store
+            .publish(
+                &execution,
+                openengine_cluster_protocol::AgentAttachEvent::Working {},
+            )
+            .await;
+    }
+    let mut close = None;
+    for _ in 0..=(openengine_cluster_protocol::DEFAULT_SUBSCRIPTION_QUEUE_CAPACITY + 4) {
+        let notification: Value = serde_json::from_str(&outbound_rx.recv().await.unwrap()).unwrap();
+        if notification.pointer("/method") == Some(&json!("subscription/closed")) {
+            close = Some(notification);
+            break;
+        }
+    }
+    assert_eq!(
+        close
+            .as_ref()
+            .and_then(|notification| notification.pointer("/params/reason")),
+        Some(&json!("SLOW_CONSUMER"))
+    );
+    task.await.unwrap();
+    assert!(state.subscriptions.lock().is_empty());
+}
+
+#[tokio::test]
+async fn native_v2_subscription_refusals_are_typed_and_release_connection_state() {
+    let dispatcher = fixture_dispatcher();
+    let cases = [
+        ("run/watch", json!({}), INVALID_PARAMS, SCHEMA_VIOLATION),
+        (
+            "run/watch",
+            json!({"runId":"run-1"}),
+            openengine_cluster_protocol::APPLICATION_ERROR,
+            INVALID_PHASE,
+        ),
+        ("run/logs", json!({}), INVALID_PARAMS, SCHEMA_VIOLATION),
+        (
+            "run/logs",
+            json!({"runId":"run-1"}),
+            openengine_cluster_protocol::APPLICATION_ERROR,
+            INVALID_PHASE,
+        ),
+        ("run/attach", json!({}), INVALID_PARAMS, SCHEMA_VIOLATION),
+        (
+            "run/attach",
+            json!({"runId":"run-1", "execution":"execution-1"}),
+            openengine_cluster_protocol::APPLICATION_ERROR,
+            INVALID_PHASE,
+        ),
+    ];
+    let (outbound_tx, mut outbound_rx) = mpsc::channel::<String>(cases.len());
+    let ConnectionSetup { state, .. } = new_connection_setup(&outbound_tx);
+
+    for (index, (method, params, rpc_code, domain_code)) in cases.into_iter().enumerate() {
+        let id = RequestId::Integer(index as i64);
+        state.in_flight_ids.lock().insert(id.clone());
+        match method {
+            "run/watch" => {
+                native_v2::run_run_watch_subscription(
+                    dispatcher.clone(),
+                    id.clone(),
+                    params,
+                    state.clone(),
+                )
+                .await;
+            }
+            "run/logs" => {
+                native_v2::run_run_logs_subscription(
+                    dispatcher.clone(),
+                    id.clone(),
+                    params,
+                    state.clone(),
+                )
+                .await;
+            }
+            "run/attach" => {
+                native_v2::run_run_attach_subscription(
+                    dispatcher.clone(),
+                    id.clone(),
+                    params,
+                    state.clone(),
+                )
+                .await;
+            }
+            _ => panic!("unexpected native-v2 subscription method"),
+        }
+
+        let response = outbound_rx.recv().await;
+        assert!(
+            response.is_some(),
+            "{method} must emit one refusal response"
+        );
+        let response: Value = serde_json::from_str(&response.unwrap_or_default())
+            .unwrap_or_else(|error| panic!("{method} emitted invalid JSON: {error}"));
+        assert_eq!(response.pointer("/error/code"), Some(&json!(rpc_code)));
+        assert_eq!(
+            response.pointer("/error/data/code"),
+            Some(&json!(domain_code))
+        );
+        assert!(!state.in_flight_ids.lock().contains(&id));
+        assert!(state.subscriptions.lock().is_empty());
+    }
 }

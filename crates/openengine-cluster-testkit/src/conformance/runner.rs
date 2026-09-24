@@ -415,3 +415,7 @@ fn validate_error_response(
     }
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "runner/tests.rs"]
+mod tests;

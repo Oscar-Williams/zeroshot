@@ -326,3 +326,7 @@ async fn identity_failure(control: &DriverControl, diagnostic: &str) -> Delivery
         Err(error) => DeliveryStop::Runner(error),
     }
 }
+
+#[cfg(test)]
+#[path = "head/tests.rs"]
+mod tests;

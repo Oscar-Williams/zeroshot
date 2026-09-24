@@ -138,3 +138,7 @@ impl TargetHttpControlAuthority {
             .await
     }
 }
+
+#[cfg(test)]
+#[path = "profiles/tests.rs"]
+mod tests;
