@@ -2,9 +2,18 @@ use super::*;
 use openengine_cluster_testkit::assertions::{AssertError, AssertValue};
 
 #[cfg(unix)]
+use futures_util::FutureExt;
+#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
+#[cfg(unix)]
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 struct Storage(std::path::PathBuf);
+
+#[cfg(unix)]
+const DIRECT_SERVE_CHILD: &str = "ZEROSHOT_TEST_DIRECT_SERVE_CHILD";
+#[cfg(unix)]
+const DIRECT_SERVE_LISTEN: &str = "ZEROSHOT_TEST_DIRECT_SERVE_LISTEN";
 
 impl Drop for Storage {
     fn drop(&mut self) {
@@ -96,6 +105,126 @@ async fn direct_serve_rejects_an_invalid_public_origin_before_preparing_storage(
     }
 }
 
+#[cfg(unix)]
+#[tokio::test]
+async fn direct_serve_shuts_down_cleanly_on_process_signal() {
+    if let Some(storage) = std::env::var_os(DIRECT_SERVE_CHILD) {
+        serve_direct_target(TargetServe {
+            listen: std::env::var(DIRECT_SERVE_LISTEN)
+                .assert_value()
+                .parse()
+                .assert_value(),
+            public_origin: "http://127.0.0.1:8080".to_owned(),
+            storage: storage.into(),
+            bootstrap_key_file: None,
+        })
+        .await
+        .assert_value();
+        return;
+    }
+
+    let root =
+        openengine_cluster_testkit::TemporaryDirectory::for_test("target-serve-signal-shutdown");
+    for (case, signal, await_listener) in [
+        ("preparing", libc::SIGTERM, false),
+        ("listening", libc::SIGINT, true),
+    ] {
+        let storage = root.path(case);
+        let listen = if await_listener {
+            let reservation = std::net::TcpListener::bind("127.0.0.1:0").assert_value();
+            let address = reservation.local_addr().assert_value();
+            drop(reservation);
+            address
+        } else {
+            "127.0.0.1:0".parse().assert_value()
+        };
+        let mut command = tokio::process::Command::new(std::env::current_exe().assert_value());
+        let null_stdio = std::process::Stdio::null;
+        command
+            .arg("direct_serve_shuts_down_cleanly_on_process_signal")
+            .env(DIRECT_SERVE_CHILD, &storage)
+            .env(DIRECT_SERVE_LISTEN, listen.to_string())
+            .stdin(null_stdio())
+            .stdout(null_stdio())
+            .stderr(null_stdio())
+            .kill_on_drop(true);
+        let mut child = command.spawn().assert_value();
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            loop {
+                let ready = if await_listener {
+                    direct_target_responds(listen).await
+                } else {
+                    storage.join("runs.sqlite3").is_file()
+                };
+                if ready {
+                    break;
+                }
+                assert!(
+                    child.try_wait().assert_value().is_none(),
+                    "direct target stopped while {case}"
+                );
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .assert_value();
+
+        let pid = i32::try_from(child.id().assert_value()).assert_value();
+        // SAFETY: pid identifies the live child owned by this test; both signals are handled.
+        assert_eq!(unsafe { libc::kill(pid, signal) }, 0);
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_secs(2), child.wait())
+                .await
+                .assert_value()
+                .assert_value()
+                .success()
+        );
+    }
+}
+
+#[cfg(unix)]
+async fn direct_target_responds(listen: std::net::SocketAddr) -> bool {
+    let Ok(mut connection) = tokio::net::TcpStream::connect(listen).await else {
+        return false;
+    };
+    if connection
+        .write_all(b"GET / HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n")
+        .await
+        .is_err()
+    {
+        return false;
+    }
+    let mut response = [0_u8; 16];
+    connection
+        .read(&mut response)
+        .await
+        .is_ok_and(|read| read > 0)
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn shutdown_waits_for_an_explicit_process_signal() {
+    assert!(shutdown_signal().assert_value().now_or_never().is_none());
+}
+
+#[tokio::test]
+async fn direct_serve_surfaces_hosting_preparation_failures() {
+    let root =
+        openengine_cluster_testkit::TemporaryDirectory::for_test("target-serve-hosting-refusal");
+    let storage = root.path("storage-blocker");
+    std::fs::write(&storage, b"not a storage directory").assert_value();
+
+    let error = serve_direct_target(TargetServe {
+        listen: "127.0.0.1:0".parse().assert_value(),
+        public_origin: "http://127.0.0.1:8080".to_owned(),
+        storage,
+        bootstrap_key_file: None,
+    })
+    .await
+    .assert_error();
+    assert!(matches!(error, TargetServeError::Hosting(_)));
+}
+
 #[tokio::test]
 async fn preparation_fails_closed_before_hosting_for_invalid_private_inputs() {
     let root = openengine_cluster_testkit::TemporaryDirectory::for_test(
@@ -169,4 +298,40 @@ async fn private_preparation_consumes_the_bootstrap_key_before_serving() {
     assert!(config.storage.join("runs.sqlite3").is_file());
     drop(listener);
     drop(server);
+}
+
+#[tokio::test]
+async fn prepared_target_reaches_a_live_listener_and_remains_active_until_cancelled() {
+    let root =
+        openengine_cluster_testkit::TemporaryDirectory::for_test("target-serve-live-listener");
+    let storage = root.path("storage");
+    let config = TargetServe {
+        listen: "127.0.0.1:0".parse().assert_value(),
+        public_origin: "http://127.0.0.1:8080".to_owned(),
+        storage: storage.clone(),
+        bootstrap_key_file: None,
+    };
+    let (server, listener) = prepare_server(&config, &config.public_origin)
+        .await
+        .assert_value();
+    let listen = listener.local_addr().assert_value();
+    let task = tokio::spawn(serve_prepared(server, listener, std::future::pending()));
+
+    let stream = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        loop {
+            match tokio::net::TcpStream::connect(listen).await {
+                Ok(stream) => return stream,
+                Err(_) if !task.is_finished() => tokio::task::yield_now().await,
+                Err(error) => panic!("direct target stopped before listening: {error}"),
+            }
+        }
+    })
+    .await
+    .assert_value();
+    assert!(storage.join("runs.sqlite3").is_file());
+    assert!(!task.is_finished());
+    drop(stream);
+
+    task.abort();
+    assert!(task.await.assert_error().is_cancelled());
 }

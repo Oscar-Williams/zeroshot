@@ -98,6 +98,8 @@ jobs:
           cargo llvm-cov report --ignore-filename-regex "$COVERAGE_IGNORE_REGEX" --lcov --output-path lcov.info
 
       - name: Summarize coverage quality
+        id: coverage_quality
+        continue-on-error: true
         run: |
           node <<'NODE'
           const fs = require('node:fs');
@@ -113,7 +115,7 @@ jobs:
 
           for (const file of report.files) {
             const { lines, regions } = file.summary;
-            if (regions.count < 150 || (lines.percent >= 75 && regions.percent >= 75)) continue;
+            if (regions.count < 150 || (lines.percent >= 80 && regions.percent >= 80)) continue;
             const path = file.filename.replace(`${process.cwd()}/`, '');
             failures.push(
               `${path}: ${lines.percent.toFixed(2)}% lines, ${regions.percent.toFixed(2)}% regions`,
@@ -132,12 +134,14 @@ jobs:
               });
             console.warn(`Coverage goals not yet met:\n- ${failures.join('\n- ')}`);
             console.warn(`Weakest files with at least 100 regions:\n- ${weakest.join('\n- ')}`);
+            process.exitCode = 1;
           } else {
             console.log('Coverage goals met.');
           }
           NODE
 
       - name: Publish coverage
+        if: ${{ always() }}
         uses: coverallsapp/github-action@8d6379e14d29928660c4ba802d8e85393440b329 # v2.3.8
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
@@ -145,3 +149,9 @@ jobs:
           format: lcov
           fail-on-error: true
           coverage-reporter-version: v0.6.22
+
+      - name: Enforce coverage quality
+        if: ${{ always() }}
+        env:
+          COVERAGE_QUALITY_OUTCOME: ${{ steps.coverage_quality.outcome }}
+        run: test "$COVERAGE_QUALITY_OUTCOME" = success

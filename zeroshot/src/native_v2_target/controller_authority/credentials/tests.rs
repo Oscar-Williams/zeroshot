@@ -5,6 +5,8 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
+use keyring::credential::CredentialApi;
+use keyring::mock::MockCredential;
 use openengine_cluster_testkit::assertions::{AssertError, AssertValue};
 
 use super::linux::LinuxTargetCredentialStore;
@@ -12,10 +14,27 @@ use super::private_file::PrivateFileTargetCredentialStore;
 use super::test_support::{MemoryCredentialStore, UnavailableCredentialStore};
 use super::{
     CredentialStorePreparation, KeyringTargetCredentialStore, TargetCredentialStore,
-    credential_service, open_refresh_lock, refresh_lock_is_held,
+    credential_service, open_refresh_lock, read_keyring_password, refresh_lock_is_held,
+    write_keyring_password,
 };
 
 const TARGET_ID: &str = "11111111-1111-4111-8111-111111111111";
+
+fn mock_keyring_entry(password: Option<&str>, fail_next_operation: bool) -> keyring::Entry {
+    let credential = MockCredential::default();
+    if let Some(password) = password {
+        credential
+            .set_password(password)
+            .expect("mock credential accepts a bounded token");
+    }
+    if fail_next_operation {
+        credential.set_error(keyring::Error::Invalid(
+            "refresh-token".to_owned(),
+            "test refusal".to_owned(),
+        ));
+    }
+    keyring::Entry::new_with_credential(Box::new(credential))
+}
 
 async fn prepare_and_store(store: &dyn TargetCredentialStore) {
     assert!(matches!(
@@ -238,6 +257,170 @@ async fn an_explicit_system_store_never_downgrades() {
     );
 }
 
+async fn assert_system_selection_is_sticky(root: &openengine_cluster_testkit::TemporaryDirectory) {
+    let system_directory = root.path("system-credentials");
+    let system = Arc::new(MemoryCredentialStore::default());
+    system
+        .set(TARGET_ID, "system-refresh-token")
+        .await
+        .assert_value();
+    let automatic_system = LinuxTargetCredentialStore::with_dependencies(
+        system_directory.clone(),
+        system,
+        Some("auto"),
+        false,
+    )
+    .assert_value();
+    assert_eq!(
+        automatic_system
+            .get(TARGET_ID)
+            .await
+            .assert_value()
+            .as_deref(),
+        Some("system-refresh-token")
+    );
+
+    let restarted = LinuxTargetCredentialStore::with_dependencies(
+        system_directory,
+        Arc::new(UnavailableCredentialStore),
+        None,
+        false,
+    )
+    .assert_value();
+    assert_eq!(
+        restarted.get(TARGET_ID).await.assert_error().to_string(),
+        "test credential store unavailable"
+    );
+}
+
+async fn assert_automatic_backend_defaults(root: &openengine_cluster_testkit::TemporaryDirectory) {
+    let desktop_directory = root.path("desktop-credentials");
+    let desktop_system = Arc::new(MemoryCredentialStore::default());
+    let desktop = LinuxTargetCredentialStore::with_dependencies(
+        desktop_directory,
+        desktop_system.clone(),
+        None,
+        true,
+    )
+    .assert_value();
+    assert_eq!(
+        desktop.prepare_for_login(TARGET_ID).await.assert_value(),
+        CredentialStorePreparation::Managed
+    );
+    desktop
+        .set(TARGET_ID, "desktop-refresh-token")
+        .await
+        .assert_value();
+    assert_eq!(
+        desktop_system
+            .get(TARGET_ID)
+            .await
+            .assert_value()
+            .as_deref(),
+        Some("desktop-refresh-token")
+    );
+
+    let headless_directory = root.path("headless-credentials");
+    let headless = LinuxTargetCredentialStore::with_dependencies(
+        headless_directory,
+        Arc::new(MemoryCredentialStore::default()),
+        None,
+        false,
+    )
+    .assert_value();
+    assert!(matches!(
+        headless.prepare_for_login(TARGET_ID).await.assert_value(),
+        CredentialStorePreparation::PrivateFile(_)
+    ));
+
+    let discovered_directory = root.path("discovered-file-credentials");
+    let private = PrivateFileTargetCredentialStore::new(discovered_directory.clone());
+    private
+        .set(TARGET_ID, "discovered-refresh-token")
+        .await
+        .assert_value();
+    let automatic_file = LinuxTargetCredentialStore::with_dependencies(
+        discovered_directory.clone(),
+        Arc::new(MemoryCredentialStore::default()),
+        None,
+        false,
+    )
+    .assert_value();
+    assert_eq!(
+        automatic_file
+            .get(TARGET_ID)
+            .await
+            .assert_value()
+            .as_deref(),
+        Some("discovered-refresh-token")
+    );
+    let restarted_file = LinuxTargetCredentialStore::with_dependencies(
+        discovered_directory,
+        Arc::new(UnavailableCredentialStore),
+        None,
+        true,
+    )
+    .assert_value();
+    assert_eq!(
+        restarted_file
+            .get(TARGET_ID)
+            .await
+            .assert_value()
+            .as_deref(),
+        Some("discovered-refresh-token")
+    );
+}
+
+async fn assert_malformed_backend_selection_is_rejected(
+    root: &openengine_cluster_testkit::TemporaryDirectory,
+) {
+    let malformed_directory = root.path("malformed-selection");
+    let malformed_private = PrivateFileTargetCredentialStore::new(malformed_directory.clone());
+    malformed_private
+        .prepare_for_login(TARGET_ID)
+        .await
+        .assert_value();
+    let malformed_selection = malformed_directory.join(format!("{TARGET_ID}.store"));
+    std::fs::write(&malformed_selection, "ambient\n").assert_value();
+    std::fs::set_permissions(&malformed_selection, std::fs::Permissions::from_mode(0o600))
+        .assert_value();
+    let malformed = LinuxTargetCredentialStore::with_dependencies(
+        malformed_directory,
+        Arc::new(MemoryCredentialStore::default()),
+        None,
+        false,
+    )
+    .assert_value();
+    assert_eq!(
+        malformed.get(TARGET_ID).await.assert_error().to_string(),
+        "target credential store selection is malformed"
+    );
+
+    for invalid in ["invalid", "SYSTEM", " file"] {
+        assert_eq!(
+            LinuxTargetCredentialStore::with_dependencies(
+                root.path(&format!("invalid-{invalid:?}")),
+                Arc::new(MemoryCredentialStore::default()),
+                Some(invalid),
+                false,
+            )
+            .assert_error()
+            .to_string(),
+            "ZEROSHOT_CREDENTIAL_STORE must be auto, system, or file"
+        );
+    }
+}
+
+#[tokio::test]
+async fn automatic_backend_selection_is_persisted_and_never_silently_reinterpreted() {
+    let root = openengine_cluster_testkit::TemporaryDirectory::for_test(
+        "zeroshot-automatic-credential-selection",
+    );
+    assert_system_selection_is_sticky(&root).await;
+    assert_automatic_backend_defaults(&root).await;
+    assert_malformed_backend_selection_is_rejected(&root).await;
+}
+
 #[test]
 fn credential_identity_and_refresh_lock_fail_closed_at_the_filesystem_boundary() {
     assert_eq!(
@@ -279,6 +462,47 @@ async fn malformed_identity_is_rejected_before_keyring_access() {
             error.to_string(),
             "stored target credential identity is invalid"
         );
+    }
+}
+
+#[test]
+fn keyring_adapter_preserves_absence_values_and_failure_boundaries() {
+    assert_eq!(
+        read_keyring_password(Ok(mock_keyring_entry(None, false))).assert_value(),
+        None
+    );
+    assert_eq!(
+        read_keyring_password(Ok(mock_keyring_entry(Some("stored-refresh-token"), false,)))
+            .assert_value()
+            .as_deref(),
+        Some("stored-refresh-token")
+    );
+    write_keyring_password(Ok(mock_keyring_entry(None, false)), "new-refresh-token").assert_value();
+
+    assert_eq!(
+        read_keyring_password(Ok(mock_keyring_entry(None, true)))
+            .assert_error()
+            .to_string(),
+        "target credential store read failed"
+    );
+    assert_eq!(
+        write_keyring_password(Ok(mock_keyring_entry(None, true)), "new-refresh-token",)
+            .assert_error()
+            .to_string(),
+        "target credential store write failed"
+    );
+
+    let unavailable = || {
+        Err(keyring::Error::Invalid(
+            "service".to_owned(),
+            "test refusal".to_owned(),
+        ))
+    };
+    for error in [
+        read_keyring_password(unavailable()).assert_error(),
+        write_keyring_password(unavailable(), "new-refresh-token").assert_error(),
+    ] {
+        assert_eq!(error.to_string(), "target credential store is unavailable");
     }
 }
 
