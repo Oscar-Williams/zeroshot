@@ -10,12 +10,14 @@ Both adjustments are declared in the experiment file and recorded in the manifes
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
 
 UPSTREAM_REFERENCE = Path("/workspace/executable")
-AGENT_GIT = ["runuser", "-u", "agent", "--", "git", "-C", "/workspace"]
+# runuser is resolved with root's PATH; the git it starts gets the agent's minimal environment.
+AGENT_GIT = [shutil.which("runuser") or "/usr/sbin/runuser", "-u", "agent", "--", "git", "-C", "/workspace"]
 AGENT_ENV = {"HOME": "/home/agent", "PATH": "/usr/bin:/bin"}
 
 
