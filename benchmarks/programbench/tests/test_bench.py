@@ -524,6 +524,48 @@ class EvalTests(unittest.TestCase):
                 evaluate.score_eval = original
         self.assertEqual(scores["01-loop__final"]["error_code"], "not_evaluated")
 
+    def test_identical_workspaces_are_evaluated_once(self):
+        from bench import evaluate
+
+        def workspace(path: Path, files: dict[str, bytes], mtime: int, mode: int = 0o644) -> Path:
+            with tarfile.open(path, "w:gz") as tar:
+                for name, data in files.items():
+                    info = tarfile.TarInfo(f"./{name}")
+                    info.size, info.mtime, info.mode = len(data), mtime, mode
+                    tar.addfile(info, io.BytesIO(data))
+            return path
+
+        with tempfile.TemporaryDirectory() as tmp:
+            results = Path(tmp, "results")
+            attempt = results / "attempts" / "01-loop"
+            (attempt / "snapshots").mkdir(parents=True)
+            workspace(attempt / "snapshots" / "build-1.tar.gz", {"a.py": b"v1"}, mtime=1)
+            workspace(attempt / "snapshots" / "check-1.tar.gz", {"a.py": b"v1"}, mtime=2)  # same code, later snapshot
+            workspace(attempt / "snapshots" / "build-2.tar.gz", {"a.py": b"v2"}, mtime=3)
+            workspace(attempt / "submission.tar.gz", {"a.py": b"v2"}, mtime=4)
+            self.assertNotEqual(evaluate.content_key(attempt / "snapshots" / "build-1.tar.gz"), evaluate.content_key(workspace(Path(tmp, "x.tar.gz"), {"a.py": b"v1"}, mtime=1, mode=0o755)))
+            calls = []
+
+            def fake_eval(exp, results, run_dirs, force):
+                calls.append(sorted(d.name for d in run_dirs))
+                for d in run_dirs:
+                    (d / exp.instance_id / f"{exp.instance_id}.eval.json").write_text(json.dumps({"from": d.name}))
+                return 0
+
+            saved = evaluate._programbench_eval, evaluate.score_eval, evaluate.leaderboard_ignores
+            evaluate._programbench_eval = fake_eval
+            evaluate.score_eval = lambda path, iid, ignores: {"score": 0.5, "passed": 1, "scored_tests": 2, "rerun_plugin_pinned": True, "from": json.loads(path.read_text())["from"], "tests": {}}
+            evaluate.leaderboard_ignores = lambda cache: {}
+            try:
+                scores = evaluate.evaluate(EXPERIMENT, results, Path(tmp))
+            finally:
+                evaluate._programbench_eval, evaluate.score_eval, evaluate.leaderboard_ignores = saved
+        self.assertEqual(calls, [["01-loop__build-1", "01-loop__final"]])  # two distinct workspaces, four archives
+        self.assertEqual(scores["01-loop__check-1"]["from"], "01-loop__build-1")
+        self.assertEqual(scores["01-loop__check-1"]["evaluated_as"], "01-loop__build-1")
+        self.assertEqual(scores["01-loop__build-2"]["from"], "01-loop__final")
+        self.assertNotIn("evaluated_as", scores["01-loop__final"])
+
     def test_rerun_plugin_is_pinned(self):
         try:
             from bench import pbeval

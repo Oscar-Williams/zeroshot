@@ -58,14 +58,14 @@
     "check_timeout_ms": 3600000
   },
   "resources": {
-    "concurrency": 4,
-    "cpus": 7,
-    "memory": "13g",
+    "concurrency": 8,
+    "cpus": 4,
+    "memory": "7g",
     "pids_limit": 8192
   },
   "eval": {
-    "workers": 4,
-    "docker_cpus": 7,
+    "workers": 8,
+    "docker_cpus": 3,
     "timeout_seconds": 14400
   },
   "pricing": {

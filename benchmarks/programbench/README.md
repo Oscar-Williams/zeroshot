@@ -60,8 +60,9 @@ default font where the program renders `Iosevka Fixed, monospace`, an `--inline`
 and a server mode that belongs to a separate program. Builders complied and lost about 70 tests
 each time. This split is exploratory (2 runs against 3).
 
-`luna-xhigh-svgbob-v2` keeps everything else identical and makes two declared adjustments to the
-environment (`task.reference_path`, `task.doc_fixes` in the experiment file; applied by
+`luna-xhigh-svgbob-v2` keeps the model, prompts, graphs, limits and decision rule, runs all eight
+attempts at once (4 CPUs and 7 GB each, instead of four at a time with 7 CPUs and 13 GB), and makes
+two declared adjustments to the environment (`task.reference_path`, `task.doc_fixes` in the experiment file; applied by
 `agent/prepare-task.py` when the image is built and recorded in the manifest):
 - the reference moves to `/reference/executable`, a root-owned directory the agent can run it
   from but cannot overwrite, move or delete; the task statement points there, and the build
@@ -173,9 +174,9 @@ a cloud instance role and with the metadata endpoint's hop limit at 1, as for th
 ## Reproduce
 
 Requirements: Linux x86_64, rootful Docker 26 or newer, and an OpenAI API key with access to the
-model. The reference host for the pilot is 32 vCPU / 64 GB / Ubuntu 24.04 / Docker 29 (four
-attempts of 7 CPUs and 13 GB at a time); each attempt needs at least 7 CPUs, and the runner
-refuses hosts that cannot fit the configured concurrency. The runner requires 60 GiB of free disk.
+model. The reference host for the pilot is 32 vCPU / 64 GB / Ubuntu 24.04 / Docker 29: v1 runs four
+attempts of 7 CPUs and 13 GB at a time, v2 all eight at once with 4 CPUs and 7 GB each. The runner
+refuses hosts that cannot fit the configured concurrency, and requires 60 GiB of free disk.
 
 ```bash
 git clone --branch benchmark/programbench https://github.com/the-open-engine/zeroshot.git
@@ -184,6 +185,9 @@ read -rs OPENAI_API_KEY && export OPENAI_API_KEY   # or scripts/push-openai-key.
 scripts/zsbench smoke                               # ~30 min plus image pulls, about $1: isolation, diagnostics, pipeline, scoring fidelity
 scripts/zsbench run experiments/luna-xhigh-svgbob.json
 ```
+
+For v2, use `scripts/zsbench smoke experiments/smoke-v2.json` and `scripts/zsbench run
+experiments/luna-xhigh-svgbob-v2.json`.
 
 To reproduce a published result exactly, check out the commit recorded in its `manifest.json`
 (`provenance.vcs_ref`) rather than the branch tip.
@@ -236,6 +240,12 @@ results/<experiment id>/
 
 ## Scoring and cost
 
+- **Evaluation once per workspace:** a check snapshot usually holds the same code as the build
+  before it, and a final the same as the last snapshot. Archives are grouped by their files'
+  contents, modes and link targets (timestamps ignored); one representative per group is evaluated
+  and its result is shared, recorded as `evaluated_as` in `scores.json` and in
+  `evals/representatives.json`. In v1 this is 23 evaluations for 51 archives, and identical
+  workspaces scored identically.
 - **Score:** `programbench eval` 1.2.4 (the leaderboard's version) on the task image pinned by
   digest, with the hidden tests pinned to Hugging Face revision `de0ddfb6` and
   `pytest-rerunfailures` pinned to 16.4 (`bench/pbeval.py`; newer releases emit phantom passing

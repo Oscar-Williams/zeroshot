@@ -7,11 +7,14 @@ leaderboard's ignore list by commit.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import shutil
 import subprocess
 import sys
-from collections import Counter
+import tarfile
+from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any
 
@@ -19,7 +22,8 @@ from .config import Experiment, pins
 from .util import SECRET_ENV, download, log, read_json, sha256_file, write_json
 
 # Eval error codes that are outcomes of the submission itself: its tree could not be committed,
-# its compile.sh failed or timed out, or it produced no usable ./executable. The leaderboard scores them 0 on every test, and so do we.
+# its compile.sh failed or timed out, or it produced no usable ./executable. The leaderboard scores
+# them 0 on every test, and so do we.
 # Any other error code, and any test-branch error, is an evaluation infrastructure failure.
 SUBMISSION_OUTCOMES = frozenset({"compile_failed", "copy_executable_failed", "hash_executable_failed", "no_executable_hash", "seed_git_failed"})
 
@@ -110,12 +114,35 @@ def targets(results: Path) -> list[tuple[str, Path]]:
     return items
 
 
+def content_key(archive: Path) -> str:
+    """The workspace inside an archive, ignoring timestamps and owners: archives with the same
+    files, contents, modes and link targets compile and test identically."""
+    entries = []
+    with tarfile.open(archive) as tar:
+        for member in tar:
+            name = member.name.removeprefix("./")
+            if member.isfile():
+                data = tar.extractfile(member)
+                entries.append((name, "file", member.mode & 0o7777, hashlib.sha256(data.read()).hexdigest() if data else ""))
+            elif member.issym() or member.islnk():
+                entries.append((name, "link", member.mode & 0o7777, member.linkname))
+            else:
+                entries.append((name, member.type.decode(errors="replace"), member.mode & 0o7777, ""))
+    return hashlib.sha256(json.dumps(sorted(entries)).encode()).hexdigest()
+
+
+def _eval_json(exp: Experiment, results: Path, label: str) -> Path:
+    return results / "evals" / label / exp.instance_id / f"{exp.instance_id}.eval.json"
+
+
 def evaluate(exp: Experiment, results: Path, cache: Path, force: bool = False) -> dict[str, Any]:
+    """Score every archive, evaluating each distinct workspace once: a check snapshot usually holds
+    the same code as the build before it, and a final the same as the last snapshot."""
     evals = results / "evals"
-    pending = []
-    for label, archive in targets(results):
-        run_dir = evals / label
-        instance_dir = run_dir / exp.instance_id
+    items = targets(results)
+    groups: dict[str, list[str]] = defaultdict(list)
+    for label, archive in items:
+        instance_dir = evals / label / exp.instance_id
         instance_dir.mkdir(parents=True, exist_ok=True)
         link = instance_dir / "submission.tar.gz"
         if link.exists() and not os.path.samefile(archive, link):
@@ -125,20 +152,29 @@ def evaluate(exp: Experiment, results: Path, cache: Path, force: bool = False) -
             link.unlink()  # re-linked below; a copied results tree loses its hard links
         if not link.exists():
             os.link(archive, link)
-        if force or not (instance_dir / f"{exp.instance_id}.eval.json").exists():
-            pending.append(run_dir)
-    run_record: dict[str, Any] = {"pending": len(pending)}
+        groups[content_key(archive)].append(label)
+    # One representative per distinct workspace: one already evaluated if there is one.
+    representative = {}
+    for labels in groups.values():
+        rep = labels[0] if force else next((label for label in labels if _eval_json(exp, results, label).exists()), labels[0])
+        representative.update(dict.fromkeys(labels, rep))
+    write_json(evals / "representatives.json", representative)
+    reps = sorted(set(representative.values()))
+    pending = [evals / rep for rep in reps if force or not _eval_json(exp, results, rep).exists()]
+    run_record: dict[str, Any] = {"archives": len(items), "distinct": len(reps), "pending": len(pending)}
     if pending:
         run_record["returncode"] = _programbench_eval(exp, results, pending, force)
+    _share_results(exp, results, representative, overwrite=force)
     ignores = leaderboard_ignores(cache)
-    scores = _scores(exp, results, ignores)
-    # Evaluation is deterministic for a given archive, so an infrastructure failure is retried
+    scores = _scores(exp, results, ignores, representative)
+    # Evaluation is deterministic for a given workspace, so an infrastructure failure is retried
     # once; a failure that persists makes the archive's run ineligible (report._eligibility).
-    retry = [evals / label for label, score in scores.items() if score.get("error_code") == "not_evaluated" or (score.get("score") is not None and infrastructure_error(score))]
+    retry = sorted({representative[label] for label, score in scores.items() if score.get("error_code") == "not_evaluated" or (score.get("score") is not None and infrastructure_error(score))})
     if retry:
-        run_record["retried"] = {run_dir.name: infrastructure_error(scores[run_dir.name]) or scores[run_dir.name].get("error_code") for run_dir in retry}
-        run_record["retry_returncode"] = _programbench_eval(exp, results, retry, force=True)
-        scores = _scores(exp, results, ignores)
+        run_record["retried"] = {rep: infrastructure_error(scores[rep]) or scores[rep].get("error_code") for rep in retry}
+        run_record["retry_returncode"] = _programbench_eval(exp, results, [evals / rep for rep in retry], force=True)
+        _share_results(exp, results, representative, overwrite=True, only=set(retry))
+        scores = _scores(exp, results, ignores, representative)
     write_json(results / "scores.json", {k: {kk: vv for kk, vv in v.items() if kk != "tests"} for k, v in scores.items()})
     write_json(results / "scores-per-test.json", {k: v.get("tests", {}) for k, v in scores.items()})
     history = results / "eval-runs.json"
@@ -168,15 +204,27 @@ def _programbench_eval(exp: Experiment, results: Path, run_dirs: list[Path], for
     return returncode
 
 
-def _scores(exp: Experiment, results: Path, ignores: dict[str, list[str]]) -> dict[str, Any]:
+def _share_results(exp: Experiment, results: Path, representative: dict[str, str], overwrite: bool, only: set[str] | None = None) -> None:
+    """Give every archive its representative's evaluation (identical workspaces)."""
+    for label, rep in representative.items():
+        if label == rep or (only is not None and rep not in only):
+            continue
+        source, target = _eval_json(exp, results, rep), _eval_json(exp, results, label)
+        if source.exists() and (overwrite or not target.exists()):
+            shutil.copyfile(source, target)
+
+
+def _scores(exp: Experiment, results: Path, ignores: dict[str, list[str]], representative: dict[str, str] | None = None) -> dict[str, Any]:
     scores: dict[str, Any] = {}
     for label, archive in targets(results):
-        eval_json = results / "evals" / label / exp.instance_id / f"{exp.instance_id}.eval.json"
+        eval_json = _eval_json(exp, results, label)
         try:
             scores[label] = score_eval(eval_json, exp.instance_id, ignores) if eval_json.exists() else {"score": None, "error_code": "not_evaluated"}
         except ValueError as error:  # e.g. eval.json cut short when the evaluation was killed
             scores[label] = {"score": None, "error_code": "not_evaluated", "error_details": f"unreadable eval.json: {str(error)[:300]}"}
         scores[label]["archive_id"] = archive_id(archive)
+        if representative and representative.get(label, label) != label:
+            scores[label]["evaluated_as"] = representative[label]
     return scores
 
 
