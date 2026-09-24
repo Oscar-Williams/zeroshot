@@ -101,17 +101,28 @@ def score_eval(eval_json: Path, instance_id: str, ignores: dict[str, list[str]])
     }
 
 
-def targets(results: Path) -> list[tuple[str, Path]]:
-    """Every archive worth scoring: each attempt's final workspace and per-round snapshots."""
+def targets(results: Path, rounds: list[int] | None = None) -> list[tuple[str, Path]]:
+    """Every archive to score: each attempt's final workspace and its per-round snapshots, or,
+    with a pre-registered schedule of ``rounds``, only the final and those rounds' builds (every
+    snapshot is still archived and can be scored later)."""
     items = []
     for attempt in sorted((results / "attempts").glob("*")):
         if not attempt.is_dir() or "." in attempt.name:  # skip NN-arm.discarded-<ts>
             continue
         if (attempt / "submission.tar.gz").exists():
             items.append((f"{attempt.name}__final", attempt / "submission.tar.gz"))
-        for snap in sorted((attempt / "snapshots").glob("*.tar.gz")):
-            items.append((f"{attempt.name}__{snap.name.removesuffix('.tar.gz')}", snap))
+        for snap in sorted((attempt / "snapshots").glob("*.tar.gz"), key=_snapshot_order):
+            name = snap.name.removesuffix(".tar.gz")
+            if rounds is None or name in {f"build-{r}" for r in rounds}:
+                items.append((f"{attempt.name}__{name}", snap))
     return items
+
+
+def _snapshot_order(path: Path) -> tuple[int, str]:
+    """build-2 before build-10: order snapshots by their round number, then by name."""
+    kind, _, rest = path.name.removesuffix(".tar.gz").partition("-")
+    number = rest.split(".", 1)[0]
+    return (int(number) if number.isdigit() else 0, kind + rest)
 
 
 def content_key(archive: Path) -> str:
@@ -139,7 +150,8 @@ def evaluate(exp: Experiment, results: Path, cache: Path, force: bool = False) -
     """Score every archive, evaluating each distinct workspace once: a check snapshot usually holds
     the same code as the build before it, and a final the same as the last snapshot."""
     evals = results / "evals"
-    items = targets(results)
+    schedule = exp.raw["eval"].get("rounds")
+    items = targets(results, schedule)
     groups: dict[str, list[str]] = defaultdict(list)
     for label, archive in items:
         instance_dir = evals / label / exp.instance_id
@@ -216,7 +228,7 @@ def _share_results(exp: Experiment, results: Path, representative: dict[str, str
 
 def _scores(exp: Experiment, results: Path, ignores: dict[str, list[str]], representative: dict[str, str] | None = None) -> dict[str, Any]:
     scores: dict[str, Any] = {}
-    for label, archive in targets(results):
+    for label, archive in targets(results, exp.raw["eval"].get("rounds")):
         eval_json = _eval_json(exp, results, label)
         try:
             scores[label] = score_eval(eval_json, exp.instance_id, ignores) if eval_json.exists() else {"score": None, "error_code": "not_evaluated"}

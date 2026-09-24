@@ -160,6 +160,9 @@ def _validate(raw: dict[str, Any]) -> None:
             raise ValueError(f"{key} must be positive")
     if "loop" in arms and not 1 <= arms["loop"]["max_iterations"] <= 100:
         raise ValueError("max_iterations must be between 1 and 100")
+    schedule = raw["eval"].get("rounds")
+    if schedule is not None and (not schedule or schedule[0] != 1 or schedule != sorted(set(schedule)) or not all(isinstance(r, int) and r >= 1 for r in schedule)):
+        raise ValueError("eval.rounds must be an ascending list of distinct round numbers starting at 1 (build 1 is the H1 baseline)")
     prices = raw["pricing"]["usd_per_million_tokens"]
     for key in ("input", "cached_input", "cache_write", "output"):
         if float(prices[key]) < 0:

@@ -296,6 +296,19 @@ def _baseline_check(attempts: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def learning_curve(attempts: list[dict[str, Any]]) -> list[str]:
+    """Hidden tests passed after each scored build round of every loop run (markdown table)."""
+    loops = [a for a in attempts if a["arm"] == "loop"]
+    numbers = sorted({int(k.split("-", 1)[1]) for a in loops for k in a["rounds"] if k.startswith("build-") and k.split("-", 1)[1].isdigit()})
+    if len(numbers) < 2:
+        return []
+    lines = ["", "Hidden tests passed after each scored build round:", "", "| Run | " + " | ".join(f"R{n}" for n in numbers) + " | Final |", "|---|" + "---|" * (len(numbers) + 1)]
+    for a in loops:
+        cells = [str((a["rounds"].get(f"build-{n}") or {}).get("passed", "—")) for n in numbers]
+        lines.append(f"| {a['label']} | " + " | ".join(cells) + f" | {(a['rounds'].get('final') or {}).get('passed', '—')} |")
+    return lines
+
+
 def markdown(summary: dict[str, Any]) -> str:
     lines = [f"# {summary['experiment']}", "", summary.get("description") or "", "", f"Model `{summary['model']}` at effort `{summary['effort']}`; {summary.get('expected_scored_tests')} scored hidden tests per run.", ""]
     lines += ["| Run | Arm | State | Rounds | Verdicts | First build | Final | Gain | Wall (min) | Cost (USD) | Flags |", "|---|---|---|---|---|---|---|---|---|---|---|"]
@@ -351,6 +364,7 @@ def markdown(summary: dict[str, Any]) -> str:
             lines.append(f"- {label} ineligible: {'; '.join(reasons)}")
     b = summary["baseline_check"]
     lines += ["", f"Baseline check: single-arm finals mean {_pct(b['single_final_mean'])} vs loop first builds mean {_pct(b['loop_first_build_mean'])}."]
+    lines += learning_curve(summary["attempts"])
     p, scored = summary.get("provenance") or {}, summary.get("scored_by") or {}
     lines += ["", f"Attempts ran at commit {p.get('vcs_ref', 'unknown')} (dirty={p.get('vcs_dirty', 'unknown')}); scored at {scored.get('vcs_ref', 'unknown')} (dirty={scored.get('vcs_dirty', 'unknown')})."]
     s = summary["secrets"]

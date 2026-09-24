@@ -142,6 +142,13 @@ class ConfigTests(unittest.TestCase):
         self.assertIn("produces an executable `./executable` in the workspace root", moved)
         self.assertIn("(`cp /reference/executable ./executable`)", moved)
 
+    def test_round_schedule_must_start_at_build_1(self):
+        v3 = config.load("experiments/luna-xhigh-svgbob-v3.json")
+        self.assertEqual(v3.max_iterations, 50)
+        for bad in ([2, 3], [1, 3, 2], [1, 1, 2], []):
+            with self.assertRaises(ValueError, msg=bad):
+                self._load({**v3.raw, "eval": {**v3.raw["eval"], "rounds": bad}})
+
     def test_digest_covers_code_but_not_tests_or_results(self):
         names = {str(p.relative_to(config.ROOT)) for p in config.code_files()}
         self.assertTrue({"bench/attempt.py", "bench/evaluate.py", "requirements.lock", "agent/Dockerfile"} <= names)
@@ -483,6 +490,14 @@ class DecisionTests(unittest.TestCase):
         run["rounds"]["final"]["executable_hash"] = "ab" * 32
         self.assertIn("final built executable is the reference", report._eligibility(run, 472))
 
+    def test_learning_curve_lists_scored_rounds(self):
+        run = self._loop("01", 200, 230)
+        run["rounds"]["build-10"] = {"passed": 225}
+        lines = report.learning_curve([run, {**run, "label": "02", "rounds": {"build-1": {"passed": 190}, "final": {"passed": 199}}}])
+        self.assertIn("| Run | R1 | R10 | Final |", lines)
+        self.assertIn("| 01 | 200 | 225 | 230 |", lines)
+        self.assertIn("| 02 | 190 | — | 199 |", lines)
+
     def test_disqualifying_audit_makes_a_run_ineligible(self):
         run = self._loop("01", 200, 260, commands={"rule_counts": {"process_environment_read": 1}, "rule_counts_by_round": {}})
         self.assertIn("audit: process_environment_read", run["ineligible_reasons"])
@@ -523,6 +538,20 @@ class EvalTests(unittest.TestCase):
             finally:
                 evaluate.score_eval = original
         self.assertEqual(scores["01-loop__final"]["error_code"], "not_evaluated")
+
+    def test_a_round_schedule_scores_only_scheduled_builds_in_numeric_order(self):
+        from bench import evaluate
+
+        with tempfile.TemporaryDirectory() as tmp:
+            snaps = Path(tmp, "attempts", "01-loop", "snapshots")
+            snaps.mkdir(parents=True)
+            for name in ("build-1", "check-1", "build-2", "build-10", "check-10", "build-11"):
+                _tar(snaps / f"{name}.tar.gz", {"a": name.encode()})
+            _tar(snaps.parent / "submission.tar.gz", {"a": b"final"})
+            everything = [label for label, _ in evaluate.targets(Path(tmp))]
+            scheduled = [label for label, _ in evaluate.targets(Path(tmp), [1, 2, 10])]
+        self.assertEqual(everything, ["01-loop__final", "01-loop__build-1", "01-loop__check-1", "01-loop__build-2", "01-loop__build-10", "01-loop__check-10", "01-loop__build-11"])
+        self.assertEqual(scheduled, ["01-loop__final", "01-loop__build-1", "01-loop__build-2", "01-loop__build-10"])
 
     def test_identical_workspaces_are_evaluated_once(self):
         from bench import evaluate

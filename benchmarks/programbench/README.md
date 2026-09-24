@@ -75,6 +75,17 @@ Both adjustments deviate from standard ProgramBench conditions, so v2 answers a 
 (does the loop help when every node keeps the oracle and accurate documentation?) and is reported
 next to v1, not instead of it.
 
+v2 result: **H1 inconclusive** under the pre-registered rule. All 5 loop runs gained (+1.9, +2.1,
++10.8, +3.6 and +0.2 points; median 2.1, sign test p = 0.031), with no collapses, but one run
+gained less than 1 point and the median is below 5. No checker ever accepted: every loop ran all 4
+rounds.
+
+`luna-xhigh-svgbob-v3` asks whether the gains keep compounding. It keeps v2's environment and
+settings and raises the loop cap from 4 to 50 rounds (about 5 minutes and $0.12 per round in v2,
+so 50 rounds fit the 6-hour cap). Every snapshot is archived, but a pre-registered schedule
+(`eval.rounds`) scores only builds 1, 2, 3, 5, 10, 20, 30, 40 and 50 plus the final workspace; the
+summary adds a learning-curve table. The H1 rule is unchanged (final against build 1).
+
 ## The graph and prompts
 
 Both arms share one byte-identical `build` node; round 1 of the loop is exactly the single arm.
