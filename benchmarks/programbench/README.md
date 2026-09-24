@@ -34,10 +34,10 @@ single-worker baseline; the single arm checks that this baseline behaves like a 
   touch harness internals in round 1; neither scored workspace contains or builds the reference
   executable; and the Codex config, the harness files and the Codex home's instruction files were
   unchanged and checked after every node, with no transcript showing loaded `AGENTS.md`
-  instructions. All 5 loop runs must be eligible, otherwise the verdict is *inconclusive*. -
-  **Supported:** every loop run gains at least 1 percentage point (above eval noise) and the median
-  gain is at least 5 points. - **Not supported:** the median gain is below 2 points. Otherwise
-  *inconclusive*.
+  instructions. All 5 loop runs must be eligible, otherwise the verdict is *inconclusive*.
+- **Supported:** every loop run gains at least 1 percentage point (above eval noise) and the median
+  gain is at least 5 points.
+- **Not supported:** the median gain is below 2 points. Otherwise *inconclusive*.
 - Reported per run as covariates, not used for eligibility: whether the reference executable still
   existed after build 1 (a builder may overwrite it, leaving the checker only the documentation),
   rounds and verdicts, and cost.
@@ -177,8 +177,8 @@ invoking user. `eval` and `report` re-score existing attempts with the current c
 code in the manifest and summary. To re-run the smoke test, move `results/smoke` aside first. Other
 settings: `ZSBENCH_RESULTS_DIR`, `ZSBENCH_SECRET_FILE`, `ZSBENCH_DOCKER_SOCK`, `ZSBENCH_IMAGE`;
 `--keep-containers` and `--skip-eval` for `run`. The runner runs under an init process, so a stop
-outside the attempt phase ends it at once (results are still handed back); `cleanup` and `eval` refuse to run while another runner
-is live.
+outside the attempt phase ends it at once (results are still handed back); `run`, `smoke`, `cleanup`
+and `eval` refuse to run while another runner is live.
 
 Other commands: `plan` (render graphs and the attempt order), `check-key`, `eval` (re-score),
 `report`, `cleanup`. Unit tests (Python 3.12): `python -m unittest discover -s tests`, or inside
