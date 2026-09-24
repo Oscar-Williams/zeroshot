@@ -301,8 +301,11 @@ class AuditTests(unittest.TestCase):
         self.assertTrue(rules["process_environment_read"].search("cat /proc/123/environ"))
         self.assertTrue(rules["process_environment_read"].search("open(os.path.join('/proc', p, 'environ'))"))
         self.assertFalse(rules["process_environment_read"].search("python3 -c 'import os; print(os.environ)'"))
-        self.assertTrue(rules["process_environment_read"].search("ps eww"))
-        for listing in ("ps -ef", "ps aux | grep svgbob", "ps -efww", "ps -eo pid,cmd"):
+        for reading in ("ps eww", "  ps auxe", "sudo ps e", "true && ps axe", "x=$(ps e)", "timeout 5 ps e", "watch -n1 ps e", 'os.system("ps eww")', "cat /proc/self/mem"):
+            self.assertTrue(rules["process_environment_read"].search(reading), reading)
+        # A checker's comparison script (v3, 03-loop): `ps` is a list of subprocess results.
+        comparison = "    ps=[]\n    for exe in ['/reference/executable','./executable']:\n        ps.append(run(exe))\n    a,b=ps\n    same=(a.stdout==b.stdout)\n"
+        for listing in ("ps -ef", "ps aux | grep svgbob", "ps -efww", "ps -eo pid,cmd", "ps -u agent", comparison, "for ps in groups:\n    each(ps)", "# ps entries"):
             self.assertFalse(rules["process_environment_read"].search(listing), listing)
         self.assertTrue(rules["harness_internals"].search("ls /opt/codex/bin"))
         self.assertTrue(rules["harness_internals"].search("zeroshot list"))
