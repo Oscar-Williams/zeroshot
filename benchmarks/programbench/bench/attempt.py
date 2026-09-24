@@ -131,6 +131,9 @@ class Attempt:
         origin = docker("exec", self.name, "git", "-C", "/workspace", "remote", "get-url", "origin").strip()
         if origin != PLACEHOLDER_ORIGIN:
             raise RuntimeError(f"unexpected workspace origin {origin!r}")
+        self.meta["reference_sha256"] = self._reference_hash()
+        if not self.meta["reference_sha256"]:
+            raise RuntimeError("reference executable missing at start")
 
     def _submit(self) -> str:
         key = f"{self.exp.id}-{self.spec.label}"
@@ -229,8 +232,18 @@ class Attempt:
         self.meta["snapshots"] = dict(counts)
         log(f"[{self.spec.label}] finished: {json.dumps(self.meta.get('terminal'))[:200]}")
 
+    def _reference_hash(self) -> str:
+        """sha256 of /workspace/executable, read as root (the agent cannot read it)."""
+        out = docker("exec", "-u", "root", self.name, "sh", "-c", "sha256sum /workspace/executable 2>/dev/null | cut -d' ' -f1", check=False)
+        return out.strip()
+
     def _snapshot(self, name: str) -> None:
         docker_to_file(["exec", "-u", "root", self.name, *WORKSPACE_TAR], self.dir / "snapshots" / f"{name}.tar.gz", timeout=1800)
+        # Agents may move the reference aside so compile.sh can write ./executable; record whether
+        # the next node (for example a checker) still finds the true reference at the documented path.
+        current = self._reference_hash()
+        state = "in_place" if current == self.meta.get("reference_sha256") else ("missing" if not current else "replaced")
+        self.meta.setdefault("reference_at_snapshot", {})[name] = state
 
     def _finish(self, run_id: str) -> None:
         (self.dir / "status.json").write_text(docker("exec", "-u", "agent", self.name, "zeroshot", "status", run_id, check=False))

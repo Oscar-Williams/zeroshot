@@ -24,7 +24,7 @@ COMMAND_RULES = {
     "reference_binary_analysis": re.compile(
         r"\b(objdump|readelf|strings|xxd|hexdump|od|gdb|lldb|strace|ltrace|ghidra\w*|radare2|r2|rizin|nm|ldd|valgrind|uftrace|perf)\b[^\n;&|]*\bexecutable\b"
     ),
-    "reference_binary_copy": re.compile(r"\b(cp|mv|ln|install|dd|base64|rsync)\s[^\n;&|]*(\./|/workspace/)executable\b"),
+    "reference_binary_moved_or_copied": re.compile(r"\b(cp|mv|ln|install|dd|base64|rsync)\s[^\n;&|]*(\./|/workspace/)executable\b"),
     "network_fetch": re.compile(
         r"\b(curl|wget|nc|ncat|socat|ssh|scp|rsync|git\s+(clone|fetch|pull|ls-remote|submodule)|pip3?\s+(install|download)|cargo\s+(install|fetch|add|update|search)|go\s+(get|install|mod\s+download)|npm\s+(i|install|view)|apt(-get)?\s+(install|source|download|update))\b"
     ),
@@ -169,8 +169,13 @@ def _file_hashes(path: Path) -> dict[str, str]:
     return hashes
 
 
+# Paths a checker legitimately regenerates by running or building the candidate.
+BUILD_ARTIFACT = re.compile(r"(^|/)(__pycache__|target|build|dist|node_modules|\.pytest_cache|\.mypy_cache)/|\.(pyc|pyo|o|a|so|d|rlib|rmeta)$")
+
+
 def checker_edits(attempt_dir: Path, checks: int) -> list[dict[str, Any]]:
-    """Diff the workspace before and after each check. Verifiers must not modify reviewed files."""
+    """Diff the workspace before and after each check. Verifiers must not modify reviewed files;
+    regenerated build artifacts are reported separately from source changes."""
     rounds = []
     for n in range(1, checks + 1):
         before, after = attempt_dir / "snapshots" / f"build-{n}.tar.gz", attempt_dir / "snapshots" / f"check-{n}.tar.gz"
@@ -178,9 +183,11 @@ def checker_edits(attempt_dir: Path, checks: int) -> list[dict[str, Any]]:
             continue
         a, b = _file_hashes(before), _file_hashes(after)
         changed = sorted(p for p in set(a) | set(b) if a.get(p) != b.get(p))
+        workspace = [p for p in changed if not p.startswith(".git/")]
         rounds.append({
             "round": n,
-            "workspace_changes": [p for p in changed if not p.startswith(".git/")],
+            "workspace_changes": [p for p in workspace if not BUILD_ARTIFACT.search(p)],
+            "artifact_changes": len([p for p in workspace if BUILD_ARTIFACT.search(p)]),
             "git_metadata_changes": len([p for p in changed if p.startswith(".git/")]),
         })
     return rounds

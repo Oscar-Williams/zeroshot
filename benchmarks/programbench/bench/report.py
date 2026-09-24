@@ -49,6 +49,7 @@ def build(exp: Experiment, results: Path, proxy_log: str | None = None) -> dict[
             "cost_usd": {node: round(accounting.cost(t, exp.pricing), 4) for node, t in tokens.items()},
             "commands": audit.command_audit(directory / "trajectories.tar.gz"),
             "checker_edits": audit.checker_edits(directory, (meta.get("snapshots") or {}).get("check", 0)),
+            "reference_at_snapshot": meta.get("reference_at_snapshot"),
         }
         attempts.append(record)
     arms = {}
@@ -96,7 +97,9 @@ def markdown(summary: dict[str, Any]) -> str:
         if a["commands"].get("web_search_calls"):
             flags.append("web_search")
         if any(r["workspace_changes"] for r in a["checker_edits"]):
-            flags.append("checker_edited_workspace")
+            flags.append("checker_edited_sources")
+        if any(state != "in_place" for state in (a.get("reference_at_snapshot") or {}).values()):
+            flags.append("reference_moved")
         gain = a["gain_over_first_build"]
         lines.append(
             f"| {a['label']} | {a['arm']} | {a['state']} | {a['builds'] or 0} | {', '.join(v or '—' for v in a['verdicts']) or '—'} | "

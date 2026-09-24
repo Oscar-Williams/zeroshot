@@ -149,11 +149,17 @@ class AuditTests(unittest.TestCase):
         rules = audit.COMMAND_RULES
         self.assertTrue(rules["reference_binary_analysis"].search("objdump -d ./executable"))
         self.assertFalse(rules["reference_binary_analysis"].search("./executable --help | strings-like-name"))
-        self.assertTrue(rules["reference_binary_copy"].search("cp ./executable /tmp/x"))
-        self.assertFalse(rules["reference_binary_copy"].search("./executable -s 'x' > out.svg"))
+        self.assertTrue(rules["reference_binary_moved_or_copied"].search("cp ./executable /tmp/x"))
+        self.assertFalse(rules["reference_binary_moved_or_copied"].search("./executable -s 'x' > out.svg"))
         self.assertTrue(rules["network_fetch"].search("cargo install svgbob_cli"))
         self.assertTrue(rules["sudo"].search("sudo apt-get install foo"))
         self.assertFalse(rules["sudo"].search("echo pseudo"))
+
+    def test_build_artifacts_are_not_source_edits(self):
+        for path in ("__pycache__/svgbob.cpython-310.pyc", "target/release/foo", "src/x.o"):
+            self.assertTrue(audit.BUILD_ARTIFACT.search(path), path)
+        for path in ("svgbob.py", "src/main.rs", "compile.sh", "targets.txt"):
+            self.assertFalse(audit.BUILD_ARTIFACT.search(path), path)
 
     def test_proxy_log_parsing(self):
         log = "\n".join([
