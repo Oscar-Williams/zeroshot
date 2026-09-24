@@ -94,16 +94,22 @@ re-derive it byte-for-byte.
   would bypass the proxy). Codex's own background requests (github.com, chatgpt.com) are refused
   and logged.
 - **Secrets:** the API key reaches Zeroshot only through `docker exec -e OPENAI_API_KEY`. Tool
-  commands cannot see it: the Codex config applies its credential exclusions and turns off the
-  shell snapshot (which otherwise re-exports the whole environment into tool shells), and the
-  Zeroshot and Codex executables are root-owned and execute-only, so the kernel marks those
-  processes non-dumpable and their `/proc/<pid>/environ` and memory are unreadable to the agent.
-  Codex's code-mode JavaScript runs in a bare V8 isolate that exposes only Codex's tool functions,
-  with no environment, file or network access. The smoke test proves each point from inside a real
-  run. Codex memories are off, so no thread's
-  context reaches another. Every artifact — plain files, archive members, nested archives, and the
-  decompressed git objects of archived repositories — is scanned for the literal key; a hit writes
-  `DO-NOT-PUBLISH.txt` and fails the command.
+  commands cannot see it: the Codex config applies its credential exclusions and turns off the shell
+  snapshot (which otherwise re-exports the whole environment into tool shells), and the Zeroshot and
+  Codex executables are root-owned and execute-only, so the kernel marks those processes
+  non-dumpable and their `/proc/<pid>/environ` and memory are unreadable to the agent. Codex's
+  code-mode JavaScript runs in a bare V8 isolate that exposes only Codex's tool functions, with no
+  environment, file or network access. The smoke test proves each point from inside a real run.
+  Every artifact — plain files, archive members, nested archives, and the decompressed git objects
+  of archived repositories — is scanned for the literal key; a hit writes `DO-NOT-PUBLISH.txt` and
+  fails the command.
+- **Node independence:** every node starts from its prompt and this configuration alone. Left
+  alone, Codex marks `/workspace` trusted on first use and then loads `AGENTS.md` files and
+  `.codex/config.toml` layers from the workspace into every later node, so a builder could instruct
+  the checker or undo the settings above. The Codex config pins the workspace as untrusted, which
+  leaves the explicit sandbox and approval settings in force; the smoke test plants a canary
+  `AGENTS.md` to prove it is never loaded, and the audit checks every transcript for loaded workspace
+  instructions. Codex memories are off as well.
 - **Tooling parity:** Zeroshot starts Codex with a minimal environment, so the rendered Codex
   config mirrors the task image's ENV (`CARGO_HOME`, `RUSTUP_HOME`, …) into tool commands. It
   also gives them the image's plain `/tmp` as `TMPDIR`, instead of a directory inside Zeroshot's

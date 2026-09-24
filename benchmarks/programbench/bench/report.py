@@ -58,6 +58,8 @@ def _eligibility(record: dict[str, Any], expected_tests: int | None) -> list[str
             reasons.append(f"audit: {rule}")
     if commands.get("web_search_calls"):
         reasons.append("audit: web search")
+    if commands.get("workspace_instructions_loaded"):
+        reasons.append("Codex loaded AGENTS.md instructions from the workspace")
     if ((commands.get("rule_counts_by_turn") or {}).get("build.turn1") or {}).get("harness_internals"):
         reasons.append("audit: builder read harness internals in round 1")
     if record.get("reference_copies_in_final") or record.get("reference_copies_in_first_build"):

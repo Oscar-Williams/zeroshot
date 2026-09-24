@@ -195,6 +195,17 @@ def _node_of(first_prompt: str) -> str:
     return "other"
 
 
+def loaded_workspace_instructions(record: dict[str, Any]) -> bool:
+    """Whether a transcript record shows Codex loading AGENTS.md from the workspace (it must not:
+    the Codex config pins /workspace as untrusted)."""
+    payload = record.get("payload") or {}
+    if record.get("type") == "world_state" and ((payload.get("state") or {}).get("agents_md") or {}).get("text"):
+        return True
+    if payload.get("type") == "message" and payload.get("role") == "user":
+        return any(str(c.get("text", "")).startswith("# AGENTS.md instructions for") for c in payload.get("content") or [] if isinstance(c, dict))
+    return False
+
+
 def command_audit(trajectories: Path) -> dict[str, Any]:
     """Scan every Codex transcript. Rule hits are counted overall and per node/turn, so the
     builder's first turn (the part both arms share) can be judged on its own. Turns are numbered
@@ -219,6 +230,7 @@ def command_audit(trajectories: Path) -> dict[str, Any]:
         key=lambda item: Path(item[0]).name,  # rollout-<creation time>-<thread>.jsonl
     )
     turns_before: Counter = Counter()
+    instructions_loaded = 0
     for _, data in transcripts:
         sessions += 1
         records = []
@@ -250,6 +262,8 @@ def command_audit(trajectories: Path) -> dict[str, Any]:
                 text = output if isinstance(output, str) else json.dumps(output)
                 if HARNESS_TOOL_ERROR.search(text or ""):
                     harness_errors.append((text or "")[:300])
+            if loaded_workspace_instructions(record):
+                instructions_loaded += 1
             item = payload.get("item") or {}
             if kind == "item_completed" and item.get("type") == "FileChange":
                 # Files the agent writes: only instrumentation code is looked for here.
@@ -274,6 +288,7 @@ def command_audit(trajectories: Path) -> dict[str, Any]:
         "rule_counts": dict(counts),
         "rule_counts_by_turn": {k: dict(v) for k, v in by_turn.items()},
         "web_search_calls": web_calls,
+        "workspace_instructions_loaded": instructions_loaded,
         "examples": {k: v for k, v in findings.items() if v},
     }
 

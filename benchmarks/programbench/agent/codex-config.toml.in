@@ -28,6 +28,13 @@ shell_snapshot = false
 generate_memories = false
 use_memories = false
 
+# Left unset, Codex marks /workspace trusted on first use and from then on loads AGENTS.md files
+# and .codex/config.toml layers from the workspace into every node: a builder could instruct the
+# checker, or undo settings in this file. Untrusted keeps every node on this configuration and its
+# prompt alone; the explicit sandbox and approval settings above still apply.
+[projects."/workspace"]
+trust_level = "untrusted"
+
 # Zeroshot starts Codex with a minimal environment. Tool commands must still see the task
 # image's toolchain variables (CARGO_HOME, RUSTUP_HOME, ...) exactly as a plain shell in the
 # image would, plus the non-interactive pager settings the upstream baseline used. Credentials

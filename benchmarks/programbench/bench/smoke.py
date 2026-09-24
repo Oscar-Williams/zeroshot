@@ -43,6 +43,23 @@ DIAGNOSTIC_TASK = """This is an environment diagnostic, not a coding task. Run e
 """
 
 
+CANARY = "zsbench-canary-7f3a"
+_TOOL_RECORDS = {"function_call", "function_call_output", "custom_tool_call", "custom_tool_call_output", "item_completed", "item_started"}
+
+
+def _canary_outside_tools(transcript: bytes) -> bool:
+    """The canary anywhere but in tool calls and their output (the model may list the workspace)."""
+    for line in transcript.splitlines():
+        if CANARY.encode() in line:
+            try:
+                kind = (json.loads(line).get("payload") or {}).get("type")
+            except json.JSONDecodeError:
+                return True
+            if kind not in _TOOL_RECORDS:
+                return True
+    return False
+
+
 class Smoke:
     def __init__(self, exp: Experiment, results: Path, cache: Path, agent_image: str, proxy_image: str):
         self.exp, self.results, self.cache, self.image, self.proxy_image = exp, results, cache, agent_image, proxy_image
@@ -104,8 +121,8 @@ class Smoke:
 
             def codex_config() -> tuple[bool, str]:
                 config = self._sh(c, "cat ~/.codex/config.toml")[1]
-                required = ('web_search = "disabled"', "shell_snapshot = false", "generate_memories = false", '"*PROXY*"')
-                return all(s in config for s in required), "web search, shell snapshot and memories off; proxy vars hidden from tools"
+                required = ('web_search = "disabled"', "shell_snapshot = false", "generate_memories = false", '"*PROXY*"', 'trust_level = "untrusted"')
+                return all(s in config for s in required), "web search, shell snapshot and memories off; proxy vars hidden from tools; workspace untrusted"
 
             self.check("codex_config_hardened", codex_config)
             self.check("workspace_origin_placeholder", lambda: (self._sh(c, "git -C /workspace remote get-url origin")[1].endswith("zeroshot-bench/local-workspace.git"), "placeholder origin"))
@@ -134,6 +151,8 @@ class Smoke:
             write_json(staging / "runtime.json", {"harness": "codex", "provider": "openai", "model": self.exp.model, "effort": "low"})
             docker("cp", f"{staging}/.", f"{c}:{RUN_DIR}")
             docker("exec", "-u", "root", c, "chmod", "-R", "a+rX", RUN_DIR)
+            # A workspace AGENTS.md must not reach the model (the workspace is pinned untrusted).
+            docker("exec", "-u", "agent", c, "sh", "-c", f"printf '%s\\n' '{CANARY}: workspace instructions were loaded.' > /workspace/AGENTS.md")
             out = docker("exec", "-u", "agent", "-w", "/workspace", "-e", SECRET_ENV, c, "zeroshot", "run", "--title", "diagnostic", "--template", "single-worker", "--input", f"{RUN_DIR}/input.json", "--uniform-runtime-config", f"{RUN_DIR}/runtime.json", "--detach", timeout=600)
             (staging / "receipt.json").write_text(out)
             deadline = time.time() + 900
@@ -164,6 +183,10 @@ class Smoke:
             try:
                 docker_to_file(["exec", "-u", "root", c, *TRAJECTORY_TAR], staging / "trajectories.tar.gz", timeout=600, ok_codes=TAR_OK)
                 tools = audit.command_audit(staging / "trajectories.tar.gz")
+                sessions = [data for name, data in audit._walk_archive(staging / "trajectories.tar.gz") if "/sessions/" in name and name.endswith(".jsonl")]
+                self.check("workspace_instructions_not_loaded", lambda: (
+                    bool(sessions) and tools.get("workspace_instructions_loaded") == 0 and not any(_canary_outside_tools(data) for data in sessions),
+                    f"{len(sessions)} session(s); workspace AGENTS.md loaded {tools.get('workspace_instructions_loaded')} time(s)"))
                 self.check("diagnostic_tools_worked", lambda: (tools.get("harness_tool_errors") == 0 and tools.get("tool_outputs", 0) >= 1, {k: tools.get(k) for k in ("tool_outputs", "harness_tool_errors", "harness_tool_error_examples")}))
             finally:
                 docker("rm", "-f", c, check=False)

@@ -134,6 +134,7 @@ class CodexConfigTests(unittest.TestCase):
         self.assertEqual(policy["set"]["CARGO_HOME"], "/usr/local/cargo")
         self.assertEqual(policy["set"]["TMPDIR"], "/tmp")
         self.assertNotIn("HOME", policy["set"])
+        self.assertEqual(parsed["projects"]["/workspace"]["trust_level"], "untrusted")
 
 
 class AccountingTests(unittest.TestCase):
@@ -238,6 +239,14 @@ class AuditTests(unittest.TestCase):
         self.assertEqual(result["rule_counts"]["process_environment_read"], 1)
         self.assertEqual(result["rule_counts"]["binary_instrumentation"], 1)
         self.assertEqual(result["rule_counts_by_turn"]["build.turn1"]["process_environment_read"], 1)
+
+    def test_loaded_workspace_instructions_are_detected(self):
+        # The two records Codex 0.155.0 writes when it loads a workspace AGENTS.md.
+        world = {"type": "world_state", "payload": {"full": True, "state": {"agents_md": {"directory": "/workspace", "text": "x"}}}}
+        message = {"type": "response_item", "payload": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "# AGENTS.md instructions for /workspace\n\n<INSTRUCTIONS>x"}]}}
+        self.assertTrue(audit.loaded_workspace_instructions(world))
+        self.assertTrue(audit.loaded_workspace_instructions(message))
+        self.assertFalse(audit.loaded_workspace_instructions({"type": "world_state", "payload": {"full": True, "state": {"agents_md": None}}}))
 
     def test_turns_continue_across_builder_threads(self):
         # A failed build makes Zeroshot start a new builder thread; its first turn is round 2.

@@ -41,10 +41,11 @@ TRAJECTORY_TAR = [
 ]
 TAR_OK = (0, 1)  # GNU tar: 1 = some files differ/changed while reading; the archive is valid
 # Content fingerprint of the harness files a later node would execute with the API key in its
-# environment. The image's sudo rules allow root through package-manager hooks, so the harness is
-# fingerprinted at start and end and any change is reported.
+# environment, and of Codex's system configuration layers (/etc/codex, absent in the image). The
+# image's sudo rules allow root through package-manager hooks, so the harness is fingerprinted at
+# start and end and any change is reported.
 HARNESS_FINGERPRINT = (
-    "cd / && find usr/local/bin/zeroshot usr/local/bin/codex opt/codex \\( -type f -o -type l \\) | LC_ALL=C sort | "
+    "cd / && find usr/local/bin/zeroshot usr/local/bin/codex opt/codex etc/codex \\( -type f -o -type l \\) 2>/dev/null | LC_ALL=C sort | "
     "while read -r f; do if [ -L \"$f\" ]; then echo \"link $f $(readlink \"$f\")\"; "
     "else echo \"file $f $(stat -c %a:%u \"$f\") $(sha256sum < \"$f\" | cut -c1-64)\"; fi; done | sha256sum | cut -c1-64"
 )
