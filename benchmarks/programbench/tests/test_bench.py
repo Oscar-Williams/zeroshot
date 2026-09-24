@@ -33,16 +33,26 @@ def _tar(path: Path, files: dict[str, bytes]) -> Path:
     return path
 
 
-def _rollout(prompt_text: str, turns: list[tuple[int, int]]) -> bytes:
-    """A Codex transcript whose cumulative usage grows by (input, output) per turn."""
-    lines = [{"type": "response_item", "payload": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Execute this graph node\nAuthored instructions:\n" + prompt_text}]}}]
+def _rollout(prompt_text: str, rounds: list[tuple[int, int]], continuation: dict[int, tuple[int, int]] | None = None) -> bytes:
+    """A Codex transcript with one graph execution per round, each starting with the node prompt;
+    cumulative usage grows by (input, output) per turn. ``continuation`` adds a second Codex turn
+    (prompted "Continue", as after a provider error) to the given round."""
+    lines = []
     total_in = total_out = 0
-    for tokens_in, tokens_out in turns:
+
+    def turn(message: str, tokens_in: int, tokens_out: int) -> None:
+        nonlocal total_in, total_out
         total_in += tokens_in
         total_out += tokens_out
         lines.append({"type": "event_msg", "payload": {"type": "task_started"}})
+        lines.append({"type": "response_item", "payload": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": message}]}})
         lines.append({"type": "event_msg", "payload": {"type": "token_count", "info": {"total_token_usage": {"input_tokens": total_in, "cached_input_tokens": total_in // 2, "cache_write_input_tokens": 0, "output_tokens": total_out}}}})
         lines.append({"type": "event_msg", "payload": {"type": "task_complete"}})
+
+    for index, (tokens_in, tokens_out) in enumerate(rounds):
+        turn("Execute this graph node\nAuthored instructions:\n" + prompt_text, tokens_in, tokens_out)
+        if continuation and index in continuation:
+            turn("Continue", *continuation[index])
     return "\n".join(json.dumps(line) for line in lines).encode()
 
 
@@ -155,10 +165,20 @@ class AccountingTests(unittest.TestCase):
         self.assertEqual(usage["nodes"]["build"]["inputTokens"], 1300)
         self.assertEqual(usage["nodes"]["check"]["inputTokens"], 400)
         self.assertEqual(usage["nodes"]["total"]["outputTokens"], 160)
-        self.assertEqual(usage["first_build_turn"]["inputTokens"], 1000)
-        self.assertEqual(sorted((s["node"], s["turns"]) for s in usage["sessions"]), [("build", 2), ("check", 1)])
+        self.assertEqual(usage["first_build_round"]["inputTokens"], 1000)
+        self.assertEqual(sorted((s["node"], s["rounds"]) for s in usage["sessions"]), [("build", 2), ("check", 1)])
 
-    def test_first_build_turn_comes_from_the_earliest_builder_thread(self):
+    def test_a_continuation_turn_belongs_to_its_round(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            _tar(Path(tmp, "trajectories.tar.gz"), {
+                ".codex/sessions/rollout-a.jsonl": _rollout(config.prompt("builder"), [(1000, 100), (300, 20)], continuation={0: (4000, 50)}),
+            })
+            usage = accounting.usage(Path(tmp))
+        self.assertEqual(usage["first_build_round"]["inputTokens"], 5000)
+        self.assertEqual(usage["nodes"]["build"]["inputTokens"], 5300)
+        self.assertEqual(usage["sessions"][0]["rounds"], 2)
+
+    def test_first_build_round_comes_from_the_earliest_builder_thread(self):
         # After a build error Zeroshot starts a new builder thread; only the earliest holds build 1.
         with tempfile.TemporaryDirectory() as tmp:
             _tar(Path(tmp, "trajectories.tar.gz"), {
@@ -166,7 +186,7 @@ class AccountingTests(unittest.TestCase):
                 ".codex/sessions/2026/09/24/rollout-2026-09-24T01-00-00-a.jsonl": _rollout(config.prompt("builder"), [(1000, 100)]),
             })
             usage = accounting.usage(Path(tmp))
-        self.assertEqual(usage["first_build_turn"]["inputTokens"], 1000)
+        self.assertEqual(usage["first_build_round"]["inputTokens"], 1000)
         self.assertEqual(usage["nodes"]["build"]["inputTokens"], 1700)
 
     def test_ledger_view_double_counts_resumed_sessions(self):
@@ -177,6 +197,25 @@ class AccountingTests(unittest.TestCase):
             {"kind": "token_usage_observed", "execution": 3, "usage": {"inputTokens": 1300, "outputTokens": 120}},
         ]
         self.assertEqual(accounting.usage_from_events(events)["build"]["inputTokens"], 2300)  # truth: 1300
+
+
+class RerunLimitTests(unittest.TestCase):
+    def test_an_attempt_that_errors_twice_is_not_run_a_third_time(self):
+        from bench.attempt import Attempt
+
+        with tempfile.TemporaryDirectory() as tmp:
+            results = Path(tmp)
+            spec = EXPERIMENT.attempts()[0]
+            attempt = Attempt(EXPERIMENT, spec, results, "image", "proxy", {})
+            attempt.dir.mkdir(parents=True)
+            (attempt.dir / "attempt.json").write_text(json.dumps({"state": "error"}))
+            self.assertFalse(attempt._rerun_limit_reached())  # first error: re-run once
+            earlier = attempt.dir.with_name(f"{attempt.dir.name}.discarded-1")
+            earlier.mkdir()
+            (earlier / "attempt.json").write_text(json.dumps({"state": "stopped"}))
+            self.assertFalse(attempt._rerun_limit_reached())  # an operator stop does not count
+            (earlier / "attempt.json").write_text(json.dumps({"state": "error"}))
+            self.assertTrue(attempt._rerun_limit_reached())
 
 
 class SnapshotLabelTests(unittest.TestCase):
@@ -238,7 +277,7 @@ class AuditTests(unittest.TestCase):
         self.assertEqual(result["rule_counts"]["reference_binary_analysis_denied"], 1)
         self.assertEqual(result["rule_counts"]["process_environment_read"], 1)
         self.assertEqual(result["rule_counts"]["binary_instrumentation"], 1)
-        self.assertEqual(result["rule_counts_by_turn"]["build.turn1"]["process_environment_read"], 1)
+        self.assertEqual(result["rule_counts_by_round"]["build.round1"]["process_environment_read"], 1)
 
     def test_loaded_agents_md_is_detected(self):
         # The two records Codex 0.155.0 writes when it loads a workspace AGENTS.md.
@@ -265,7 +304,7 @@ class AuditTests(unittest.TestCase):
                 ".codex/sessions/2026/09/24/rollout-2026-09-24T01-00-00-a.jsonl": session("ls"),
             })
             result = audit.command_audit(archive)
-        self.assertEqual(result["rule_counts_by_turn"], {"build.turn2": {"harness_internals": 1}})
+        self.assertEqual(result["rule_counts_by_round"], {"build.round2": {"harness_internals": 1}})
 
     def test_git_objects_scan_tolerates_absolute_links(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -329,8 +368,11 @@ class DecisionTests(unittest.TestCase):
     def _loop(self, label, first, final, **extra):
         record = {
             "label": label, "arm": "loop", "state": "complete", "build_outcomes": ["verified"], "snapshots": {},
-            "rounds": {"build-1": {"score": first / 472, "passed": first, "scored_tests": 472}, "final": {"score": final / 472, "passed": final, "scored_tests": 472}},
-            "commands": {"rule_counts": {}, "rule_counts_by_turn": {}}, "reference_copies_in_final": [], "codex_config_unchanged": True, "harness_unchanged": True,
+            "rounds": {
+                "build-1": {"score": first / 472, "passed": first, "scored_tests": 472, "rerun_plugin_pinned": True},
+                "final": {"score": final / 472, "passed": final, "scored_tests": 472, "rerun_plugin_pinned": True},
+            },
+            "commands": {"rule_counts": {}, "rule_counts_by_round": {}}, "reference_copies_in_final": [], "codex_config_unchanged": True, "harness_unchanged": True,
             "gain_tests": final - first,
         }
         record.update(extra)
@@ -346,8 +388,10 @@ class DecisionTests(unittest.TestCase):
     def test_not_supported_and_incomplete(self):
         flat = [self._loop(f"0{i}", 200, 203) for i in range(5)]
         self.assertEqual(report._decision(flat, 472, EXPERIMENT)["verdict"], "not supported")
-        flat[0] = self._loop("00", 200, 260, build_outcomes=["timeout"])
+        flat[0] = self._loop("00", 200, 260, build_outcomes=["crash"])
         self.assertTrue(report._decision(flat, 472, EXPERIMENT)["verdict"].startswith("inconclusive (only 4 of 5"))
+        # A build 1 that used its full time budget is a fair baseline: a single-arm build hits the same limit.
+        self.assertEqual(self._loop("05", 200, 260, build_outcomes=["timeout"])["ineligible_reasons"], [])
 
     def test_discarded_attempts_are_reported_not_scored(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -356,6 +400,25 @@ class DecisionTests(unittest.TestCase):
             (discarded / "attempt.json").write_text(json.dumps({"label": "03-loop", "state": "error", "error": "RuntimeError: boom", "wall_seconds": 12}))
             entries = report._discarded(Path(tmp), EXPERIMENT.pricing)
         self.assertEqual(entries, [{"directory": "03-loop.discarded-1700000000", "label": "03-loop", "state": "error", "error": "RuntimeError: boom", "force_stopped": None, "wall_seconds": 12, "cost_usd": None}])
+
+    def test_compile_failures_count_and_infrastructure_errors_disqualify(self):
+        # A workspace that does not compile scores 0 on every test, as on the leaderboard.
+        broken = self._loop("01", 0, 240)
+        broken["rounds"]["build-1"].update(error_code="compile_failed", passed=0, score=0.0)
+        self.assertEqual(report._eligibility(broken, 472), [])
+        flaky = self._loop("02", 200, 240)
+        flaky["rounds"]["final"]["test_branch_errors"] = {"main": [{"error_code": "run_tests_failed"}]}
+        self.assertTrue(any(r.startswith("final evaluation failed") for r in report._eligibility(flaky, 472)))
+        unpinned = self._loop("04", 200, 240)
+        unpinned["rounds"]["final"]["rerun_plugin_pinned"] = False
+        self.assertIn("final evaluation failed: pinned pytest-rerunfailures was not active", report._eligibility(unpinned, 472))
+        docker = self._loop("03", 200, 240)
+        docker["rounds"]["build-1"]["error_code"] = "wipe_workspace_failed"
+        self.assertTrue(any(r.startswith("build-1 evaluation failed") for r in report._eligibility(docker, 472)))
+
+    def test_a_missing_codex_home_probe_counts_as_not_checked(self):
+        meta = {"codex_home_surfaces": ["./config.toml 00"], "snapshots": {"build-1": {"codex_home_surfaces": ["./config.toml 00"]}, "check-1": {"probe_errors": {"codex_home_surfaces": "x"}}}, "codex_home_surfaces_end": ["./config.toml 00"]}
+        self.assertEqual(report.codex_home_changes(meta), ["not checked after check-1"])
 
     def test_files_left_in_codex_home_make_a_run_ineligible(self):
         meta = {"codex_home_surfaces": [], "snapshots": {"build-1": {"codex_home_surfaces": ["./AGENTS.md 0123456789abcdef"]}}, "codex_home_surfaces_end": []}
@@ -369,7 +432,7 @@ class DecisionTests(unittest.TestCase):
         self.assertIn("final built executable is the reference", report._eligibility(run, 472))
 
     def test_disqualifying_audit_makes_a_run_ineligible(self):
-        run = self._loop("01", 200, 260, commands={"rule_counts": {"process_environment_read": 1}, "rule_counts_by_turn": {}})
+        run = self._loop("01", 200, 260, commands={"rule_counts": {"process_environment_read": 1}, "rule_counts_by_round": {}})
         self.assertIn("audit: process_environment_read", run["ineligible_reasons"])
 
 

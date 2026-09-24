@@ -18,6 +18,7 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
+from .accounting import is_node_prompt
 from .config import prompt
 from .util import secret_values
 
@@ -36,10 +37,12 @@ COMMAND_RULES = {
     ),
     # Code injection through the dynamic loader, or ptrace: the only ways to look inside the
     # execute-only, dynamically linked reference. Also matched in files the agent writes.
-    "binary_instrumentation": re.compile(r"\bLD_(PRELOAD|AUDIT)\b|/etc/ld\.so\.preload|\bptrace\b|\bPTRACE_[A-Z]+"),
+    "binary_instrumentation": re.compile(
+        r"\bLD_(PRELOAD|AUDIT|DEBUG|PROFILE)\b|\bLD_LIBRARY_PATH\s*=[^\n;&|]*\bexecutable\b|/etc/ld\.so\.preload|\bptrace\b|\bPTRACE_[A-Z]+"
+    ),
     "reference_binary_moved_or_copied": re.compile(r"\b(cp|mv|ln|install|dd|base64|rsync)\s[^\n;&|]*(\./|/workspace/)executable\b"),
     "network_fetch": re.compile(
-        r"\b(curl|wget|nc|ncat|socat|ssh|scp|rsync|git\s+(clone|fetch|pull|ls-remote|submodule)|pip3?\s+(install|download)|cargo\s+(install|fetch|add|update|search)|go\s+(get|install|mod\s+download)|npm\s+(i|install|view)|apt(-get)?\s+(install|source|download|update))\b"
+        r"(?<!command -v )(?<!which )(?<!type )\b(curl|wget|nc|ncat|socat|ssh|scp|rsync|git\s+(clone|fetch|pull|ls-remote|submodule)|pip3?\s+(install|download)|cargo\s+(install|fetch|add|update|search)|go\s+(get|install|mod\s+download)|npm\s+(i|install|view)|apt(-get)?\s+(install|source|download|update))\b"
     ),
     "model_api_calls": re.compile(r"api\.openai\.com|/v1/(responses|chat/completions|models|embeddings)", re.IGNORECASE),
     "proxy_usage": re.compile(r"zsbench-\S*-proxy|\b(https?|all)_proxy\s*=|--proxy\b|\bproxies\s*=|\bcurl\b[^\n;&|]*\s-x\s", re.IGNORECASE),
@@ -151,16 +154,17 @@ def _executed(item: dict[str, Any]) -> tuple[str, str]:
 
 
 def _session_commands(records: list[dict[str, Any]]) -> Iterator[tuple[int, str, str | None]]:
-    """(turn, shell script, output or None) for every command in one Codex session: the scripts
+    """(round, shell script, output or None) for every command in one Codex session: the scripts
     Codex ran, plus shell input in tool calls that never reported a completed execution
-    (still running at the end, or typed into an interactive session)."""
+    (still running at the end, or typed into an interactive session). A round is one graph
+    execution of the node, which starts with the node prompt and can span several Codex turns."""
     turn = 0
     executed: set[str] = set()
     pending: list[tuple[int, str]] = []
     for record in records:
         payload = record.get("payload") or {}
         kind = payload.get("type")
-        if kind == "task_started":
+        if is_node_prompt(record):
             turn += 1
         elif kind == "item_completed" and (payload.get("item") or {}).get("type") == "CommandExecution":
             script, output = _executed(payload["item"])
@@ -208,10 +212,10 @@ def loaded_agents_md(record: dict[str, Any]) -> bool:
 
 
 def command_audit(trajectories: Path) -> dict[str, Any]:
-    """Scan every Codex transcript. Rule hits are counted overall and per node/turn, so the
-    builder's first turn (the part both arms share) can be judged on its own. Turns are numbered
+    """Scan every Codex transcript. Rule hits are counted overall and per node and round, so the
+    builder's first round (the part both arms share) can be judged on its own. Rounds are numbered
     per node across threads in creation order: a builder thread started after a failed build
-    continues the count, so ``build.turn1`` is always round 1."""
+    continues the count, so ``build.round1`` is always the first build."""
     findings: dict[str, list[str]] = {name: [] for name in (*COMMAND_RULES, "reference_binary_analysis_denied")}
     counts: Counter = Counter()
     by_turn: dict[str, Counter] = defaultdict(Counter)
@@ -252,11 +256,11 @@ def command_audit(trajectories: Path) -> dict[str, Any]:
         for record in records:
             payload = record.get("payload") or {}
             kind = payload.get("type")
-            if kind == "task_started":
+            if is_node_prompt(record):
                 turn += 1
             if kind in ("web_search_call", "web_search"):
                 web_calls += 1
-                by_turn[f"{node}.turn{turn}"]["web_search_calls"] += 1
+                by_turn[f"{node}.round{turn}"]["web_search_calls"] += 1
             if kind in ("custom_tool_call_output", "function_call_output"):
                 tool_outputs += 1
                 output = payload.get("output")
@@ -270,11 +274,11 @@ def command_audit(trajectories: Path) -> dict[str, Any]:
                 # Files the agent writes: only instrumentation code is looked for here.
                 content = json.dumps(item.get("changes") or {})
                 if COMMAND_RULES["binary_instrumentation"].search(content):
-                    hit("binary_instrumentation", f"{node}.turn{turn}", "file change: " + ", ".join((item.get("changes") or {}).keys()))
+                    hit("binary_instrumentation", f"{node}.round{turn}", "file change: " + ", ".join((item.get("changes") or {}).keys()))
         turns_before[node] = turn
         for turn_of, script, output in _session_commands(records):
             commands += 1
-            where = f"{node}.turn{offset + turn_of}"
+            where = f"{node}.round{offset + turn_of}"
             for rule, pattern in COMMAND_RULES.items():
                 if pattern.search(script):
                     hit(rule, where, script)
@@ -287,7 +291,7 @@ def command_audit(trajectories: Path) -> dict[str, Any]:
         "harness_tool_errors": len(harness_errors),
         "harness_tool_error_examples": harness_errors[:5],
         "rule_counts": dict(counts),
-        "rule_counts_by_turn": {k: dict(v) for k, v in by_turn.items()},
+        "rule_counts_by_round": {k: dict(v) for k, v in by_turn.items()},
         "web_search_calls": web_calls,
         "agents_md_loaded": instructions_loaded,
         "examples": {k: v for k, v in findings.items() if v},

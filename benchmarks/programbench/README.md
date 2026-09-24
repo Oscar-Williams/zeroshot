@@ -24,18 +24,26 @@ single-worker baseline; the single arm checks that this baseline behaves like a 
 
 **Pre-registered decision rule** (also in the experiment file; computed in whole tests):
 
-- **Eligibility:** a loop run counts only if it completed; its build-1 snapshot and final workspace
-  were both scored on all tests without eval errors; build 1 ended cleanly; it has no
-  disqualifying audit finding (binary instrumentation such as `LD_PRELOAD` or ptrace, direct
+- **Eligibility:** a loop run counts only if it completed; its build-1 snapshot was archived and
+  both it and the final workspace were scored on all tests (a workspace that fails to compile or
+  produces no executable scores 0, as on the leaderboard; an evaluation infrastructure error is
+  re-evaluated once and disqualifies the run if it persists); build 1 ended normally or at its node
+  time limit (a crash or malformed response cuts the baseline short); it has no disqualifying audit
+  finding (binary instrumentation such as `LD_PRELOAD`, `LD_AUDIT`, `LD_DEBUG` or ptrace, direct
   model-API calls, proxy use by tools, process-environment reads, web search); its builder did not
   touch harness internals in round 1; neither scored workspace contains or builds the reference
-  executable; and the Codex config was unchanged. All 5 loop runs must be eligible, otherwise the
-  verdict is *inconclusive*.
+  executable; and the Codex config, the harness files and the Codex home's instruction files were
+  unchanged and checked after every node, with no transcript showing loaded `AGENTS.md`
+  instructions. All 5 loop runs must be eligible, otherwise the verdict is *inconclusive*.
 - **Supported:** every loop run gains at least 1 percentage point (above eval noise) and the
   median gain is at least 5 points.
 - **Not supported:** the median gain is below 2 points. Otherwise *inconclusive*.
+- Reported per run as covariates, not used for eligibility: whether the reference executable still
+  existed after build 1 (a builder may overwrite it, leaving the checker only the documentation),
+  rounds and verdicts, and cost.
 - The final workspace counts even when the 6-hour cap force-stops a run. Attempts that fail for
-  infrastructure reasons are re-run once; the discarded attempt is kept and reported.
+  infrastructure reasons are re-run once (the runner refuses a second re-run); the discarded attempt
+  is kept and reported.
 
 A supported H1 shows that check-and-repair beats stopping after one build. It does not by itself
 show that the checker's *independence* is what helps (the loop also spends more compute); that is
@@ -52,8 +60,9 @@ loop "solve" (max 4 rounds; stop when check.verdict = accepted)
            becomes the builder's feedback for the next round
 ```
 
-Failed rounds follow Zeroshot's normal semantics. A build that errors or times out leaves the
-workspace as it is, the check still runs, and the next round's builder starts a new thread. A check
+Failed rounds follow Zeroshot's normal semantics. A build that crashes or times out leaves the
+workspace as it is, the check still runs, and the next round's builder starts a new thread (after a
+malformed response it keeps its thread). A check
 that errors records no verdict, so the loop continues and the builder receives the previous feedback
 again (none, if the first check errors). Zeroshot retries a crashed check once, never a timeout or
 an invalid response.
@@ -96,12 +105,15 @@ re-derive it byte-for-byte.
 - **Secrets:** the API key reaches Zeroshot only through `docker exec -e OPENAI_API_KEY`. Tool
   commands cannot see it: the Codex config applies its credential exclusions and turns off the shell
   snapshot (which otherwise re-exports the whole environment into tool shells), and the Zeroshot and
-  Codex executables are root-owned and execute-only, so the kernel marks those processes
-  non-dumpable and their `/proc/<pid>/environ` and memory are unreadable to the agent. Codex's
-  code-mode JavaScript runs in a bare V8 isolate that exposes only Codex's tool functions, with no
-  environment, file or network access. The smoke test proves each point from inside a real run.
-  Every artifact — plain files, archive members, nested archives, and the decompressed git objects
-  of archived repositories — is scanned for the literal key; a hit writes `DO-NOT-PUBLISH.txt` and
+  Codex executables are root-owned and execute-only, so the kernel marks the processes the harness
+  starts from them non-dumpable and their `/proc/<pid>/environ` and memory are unreadable to the
+  agent (a readable copy of Codex would expose its key). A process that `docker exec` starts
+  directly stays dumpable even from an execute-only file, so the runner starts the key-holding
+  submitter through a shell's `exec`. Codex's code-mode JavaScript runs in a bare V8 isolate that
+  exposes only Codex's tool functions, with no environment, file or network access. The smoke test
+  proves each point from inside a real run and checks the submitter's launch path on the host. Every
+  artifact — plain files, archive members, nested archives, and the decompressed git objects of
+  archived repositories — is scanned for the literal key; a hit writes `DO-NOT-PUBLISH.txt` and
   fails the command.
 - **Node independence:** every node starts from its prompt and this configuration alone. Left alone,
   Codex marks `/workspace` trusted on first use and then loads `AGENTS.md` files and
@@ -113,6 +125,11 @@ re-derive it byte-for-byte.
   runner records those files and the config (none but the config exist at the start) along with the
   harness fingerprint; any change, or any transcript that shows loaded `AGENTS.md` instructions,
   makes a loop run ineligible. Codex memories are off as well.
+- **Harness integrity:** Zeroshot resolves `codex` through the `PATH` it starts with, for every
+  node, and the task image puts the world-writable `/usr/local/cargo/bin` first. The runner therefore
+  starts Zeroshot by absolute path with a `PATH` of root-owned directories only, so no node can plant
+  a `codex` that a later node would run with the key; tool shells keep the image's `PATH`. The smoke
+  test plants decoy `codex` and `zeroshot` executables there and requires that neither ever runs.
 - **Tooling parity:** Zeroshot starts Codex with a minimal environment, so the rendered Codex
   config mirrors the task image's ENV (`CARGO_HOME`, `RUSTUP_HOME`, …) into tool commands. It
   also gives them the image's plain `/tmp` as `TMPDIR`, instead of a directory inside Zeroshot's
@@ -131,7 +148,7 @@ a cloud instance role and with the metadata endpoint's hop limit at 1, as for th
 Requirements: Linux x86_64, rootful Docker 26 or newer, and an OpenAI API key with access to the
 model. The reference host for the pilot is 32 vCPU / 64 GB / Ubuntu 24.04 / Docker 29 (four
 attempts of 7 CPUs and 13 GB at a time); each attempt needs at least 7 CPUs, and the runner
-refuses hosts that cannot fit the configured concurrency. Plan on 40 GB of free disk.
+refuses hosts that cannot fit the configured concurrency. The runner requires 60 GB of free disk.
 
 ```bash
 git clone --branch benchmark/programbench https://github.com/the-open-engine/zeroshot.git
@@ -151,8 +168,15 @@ read-only file, never as container config. Long runs: `ZSBENCH_DETACH=1 scripts/
 follow with `docker logs -f zsbench-runner`, and stop with `docker stop -t 1800 zsbench-runner` so
 attempts are wound down and recorded; evaluation is then skipped, and running the same command again
 resumes (stopped attempts start over, completed ones are kept). The runner refuses to resume into
-results from a different experiment digest, refuses to start while another runner's containers are
-running (`bench cleanup` removes them), and hands results back to the invoking user.
+results from a different experiment digest (`--allow-mixed` overrides), refuses to start while
+another runner's containers are running (`scripts/zsbench cleanup <experiment>` removes them) or
+when the configured concurrency would oversubscribe the host's CPUs, and hands results back to the
+invoking user. `eval` and `report` re-score existing attempts with the current code and record that
+code in the manifest and summary. To re-run the smoke test, move `results/smoke` aside first. Other
+settings: `ZSBENCH_RESULTS_DIR`, `ZSBENCH_SECRET_FILE`, `ZSBENCH_DOCKER_SOCK`, `ZSBENCH_IMAGE`;
+`--keep-containers` and `--skip-eval` for `run`. The runner runs under an init process, so a stop
+outside the attempt phase ends it at once; `cleanup` and `eval` refuse to run while another runner
+is live.
 
 Other commands: `plan` (render graphs and the attempt order), `check-key`, `eval` (re-score),
 `report`, `cleanup`. Unit tests (Python 3.12): `python -m unittest discover -s tests`, or inside
@@ -193,11 +217,12 @@ results/<experiment id>/
   The smoke test re-scores a pinned, published leaderboard submission on the same task and
   requires agreement within 2 points (observed: 53.8% vs 53.6%, one test).
 - **Cost:** priced from Codex's own session transcripts (each is one thread; its cumulative usage
-  splits into turns) with the experiment's pricing table (input, cache reads, cache writes,
+  splits into rounds at each node prompt) with the experiment's pricing table (input, cache reads, cache writes,
   output). Zeroshot's ledger is reported alongside but not used: it double-counts a resumed
   thread's earlier turns.
 - **Audits:** the shell commands Codex actually ran (from its transcripts, not the code-mode
-  JavaScript around them) are scanned per node and turn, along with web-search calls and, for
+  JavaScript around them) are scanned per node and round (one graph execution, which can span
+  several Codex turns), along with web-search calls and, for
   instrumentation code, the files the agent wrote. Disqualifying findings are the channels that
   could carry withheld information: instrumenting a binary (`LD_PRELOAD`, `LD_AUDIT`, ptrace, the
   only way to look inside the execute-only, dynamically linked reference), calling the model API,
@@ -224,3 +249,5 @@ results/<experiment id>/
 - **Single-arm prompt:** the shared builder prompt mentions review feedback, which the single arm
   never receives.
 - **Scope:** one task. Generality needs a follow-up panel of tasks drawn at random.
+- **Served model:** OpenAI serves `gpt-5.6-luna` by name; transcripts do not identify a model
+  snapshot, so a reproduction assumes the same served model.

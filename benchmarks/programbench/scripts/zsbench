@@ -25,7 +25,9 @@ if ref=$(git -C "$here" rev-parse HEAD 2>/dev/null); then
 else
   ref=unknown dirty=unknown
 fi
-if [[ ${1:-} == run && $dirty != false && ${ZSBENCH_ALLOW_DIRTY:-0} != 1 ]]; then
+paid_run=false
+for arg in "$@"; do [[ $arg == run ]] && paid_run=true; done
+if [[ $paid_run == true && $dirty != false && ${ZSBENCH_ALLOW_DIRTY:-0} != 1 ]]; then
   echo "Refusing a paid run from a tree that is not a clean git checkout (commit $ref, dirty=$dirty)." >&2
   echo "Commit or stash your changes, or set ZSBENCH_ALLOW_DIRTY=1 to override." >&2
   exit 1
@@ -61,7 +63,7 @@ if [[ ${ZSBENCH_DETACH:-0} == 1 ]]; then
     exit 1
   fi
   docker rm zsbench-runner >/dev/null 2>&1 || true
-  docker run -d --name zsbench-runner --label zsbench=1 --stop-timeout 1800 "${args[@]}" "$image" "$@"
+  docker run -d --init --name zsbench-runner --label zsbench=1 --label zsbench.runner=1 --stop-timeout 1800 "${args[@]}" "$image" "$@"
   if [[ -n $temp_secret ]]; then
     sleep 20  # the runner reads the key at startup; the temporary file is then removed
   fi
@@ -69,4 +71,4 @@ if [[ ${ZSBENCH_DETACH:-0} == 1 ]]; then
 fi
 tty=()
 [[ -t 0 ]] && tty=(-it)
-docker run --rm "${tty[@]}" "${args[@]}" "$image" "$@"
+docker run --rm --init --label zsbench.runner=1 "${tty[@]}" "${args[@]}" "$image" "$@"

@@ -4,8 +4,10 @@ Zeroshot's ledger cannot be summed directly: when a node resumes the same Codex 
 builder uses ``sessionScope: node_instance``), Codex reports the thread's running total and the
 ledger stores it as that execution's usage, so later builder rounds would be counted again. Each
 Codex transcript (``rollout-*.jsonl``) is one thread; its last ``token_count`` event carries the
-thread's true cumulative usage, and the totals at each ``task_complete`` split it into turns
-(one turn per graph execution of that node).
+thread's true cumulative usage. Every graph execution of a node starts with the node's prompt
+("Authored instructions"), so the totals at those prompts split a thread into rounds. One round
+can span several Codex turns (Zeroshot continues a turn after a provider error, or asks for a
+corrected response), which is why turns are not used.
 """
 
 from __future__ import annotations
@@ -49,8 +51,16 @@ def node_of_session(first_prompt: str) -> str:
     return "other"
 
 
+def is_node_prompt(record: dict[str, Any]) -> bool:
+    """The user message that starts one graph execution of a node."""
+    payload = record.get("payload") or {}
+    if payload.get("type") != "message" or payload.get("role") != "user":
+        return False
+    return any("Authored instructions" in str(c.get("text", "")) for c in payload.get("content") or [] if isinstance(c, dict))
+
+
 def sessions(trajectories: Path) -> list[dict[str, Any]]:
-    """One record per Codex thread: its node, cumulative usage, and per-turn usage."""
+    """One record per Codex thread: its node, cumulative usage, and usage per round."""
     out = []
     if not trajectories.exists():
         return out
@@ -61,26 +71,28 @@ def sessions(trajectories: Path) -> list[dict[str, Any]]:
             data = tar.extractfile(member)
             if data is None:
                 continue
-            first_prompt, total, turns, last_turn_total = "", _zero(), [], _zero()
+            first_prompt, total, rounds, round_start, decreased = "", _zero(), [], None, False
             for line in data.read().splitlines():
                 try:
                     record = json.loads(line)
                 except json.JSONDecodeError:
                     continue
                 payload = record.get("payload") or {}
-                kind = payload.get("type")
-                if not first_prompt and kind == "message" and payload.get("role") == "user":
-                    text = " ".join(c.get("text", "") for c in payload.get("content") or [] if isinstance(c, dict))
-                    if "Authored instructions" in text:
-                        first_prompt = text
-                elif kind == "token_count" and (payload.get("info") or {}).get("total_token_usage"):
-                    total = _from_codex(payload["info"]["total_token_usage"])
-                elif kind == "task_complete":
-                    turns.append(_minus(total, last_turn_total))
-                    last_turn_total = dict(total)
-            if total != last_turn_total:  # usage after the last completed turn (a killed or timed-out turn)
-                turns.append(_minus(total, last_turn_total))
-            out.append({"file": member.name, "node": node_of_session(first_prompt), "total": total, "turns": turns})
+                if is_node_prompt(record):
+                    if not first_prompt:
+                        first_prompt = " ".join(str(c.get("text", "")) for c in payload.get("content") or [] if isinstance(c, dict))
+                    if round_start is not None:
+                        rounds.append(_minus(total, round_start))
+                    round_start = dict(total)
+                elif payload.get("type") == "token_count" and (payload.get("info") or {}).get("total_token_usage"):
+                    new_total = _from_codex(payload["info"]["total_token_usage"])
+                    decreased |= any(new_total[k] < total[k] for k in FIELDS)  # cumulative usage must not shrink
+                    total = new_total
+            if round_start is not None:
+                rounds.append(_minus(total, round_start))
+            elif total != _zero():  # usage without any node prompt
+                rounds.append(dict(total))
+            out.append({"file": member.name, "node": node_of_session(first_prompt), "total": total, "rounds": rounds, "usage_decreased": decreased})
     return out
 
 
@@ -88,21 +100,21 @@ def usage(attempt_dir: Path) -> dict[str, Any]:
     """Per-node and total usage from transcripts, the builder's first turn separately, and the
     ledger's figure for comparison."""
     per_node: dict[str, dict[str, int]] = defaultdict(_zero)
-    first_build_turn = None
+    first_build_round = None
     # Transcript names start with their creation time, so the earliest builder thread holds build
     # 1 (a build error makes Zeroshot start a new thread for the next round).
     records = sorted(sessions(attempt_dir / "trajectories.tar.gz"), key=lambda s: Path(s["file"]).name)
     for session in records:
         _add(per_node[session["node"]], session["total"])
         _add(per_node["total"], session["total"])
-        if session["node"] == "build" and session["turns"] and first_build_turn is None:
-            first_build_turn = dict(session["turns"][0])
+        if session["node"] == "build" and session["rounds"] and first_build_round is None:
+            first_build_round = dict(session["rounds"][0])
     ledger_events = ledger.events(attempt_dir / "trajectories.tar.gz")
     ledger_nodes = usage_from_events(ledger_events) if ledger_events else {}
     return {
         "nodes": dict(per_node),
-        "first_build_turn": first_build_turn or _zero(),
-        "sessions": [{"node": s["node"], "turns": len(s["turns"]), "total": s["total"]} for s in records],
+        "first_build_round": first_build_round,
+        "sessions": [{"node": s["node"], "rounds": len(s["rounds"]), "total": s["total"], "usage_decreased": s["usage_decreased"]} for s in records],
         "ledger_total": ledger_nodes.get("total"),
         "ledger_nodes": ledger_nodes,
     }

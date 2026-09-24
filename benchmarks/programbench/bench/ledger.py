@@ -20,12 +20,14 @@ def events(trajectories: Path) -> list[dict[str, Any]] | None:
         if len(ledgers) != 1:
             return None
         with tempfile.TemporaryDirectory() as tmp:
-            for name in (ledgers[0], ledgers[0] + "-wal", ledgers[0] + "-shm"):
+            for name in (ledgers[0], ledgers[0] + "-wal", ledgers[0] + "-shm", ledgers[0] + "-journal"):
                 if name in members:
                     tar.extract(members[name], tmp, filter="data")
             db = sqlite3.connect(Path(tmp) / ledgers[0])
             try:
                 rows = db.execute("select event_json from v2_run_events order by sequence").fetchall()
+            except sqlite3.DatabaseError:  # a copy torn mid-write: treat as missing
+                return None
             finally:
                 db.close()
     return [json.loads(row[0]) for row in rows]

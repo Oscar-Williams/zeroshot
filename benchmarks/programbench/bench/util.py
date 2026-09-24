@@ -103,7 +103,7 @@ def read_json(path: Path) -> Any:
 def require_secret() -> None:
     value = os.environ.get(SECRET_ENV, "")
     if not value.strip():
-        sys.exit(f"{SECRET_ENV} is not set. Pass it with `docker run -e {SECRET_ENV}` or mount a file (see README).")
+        sys.exit(f"{SECRET_ENV} is not set. Export it before scripts/zsbench, or store it with scripts/push-openai-key.sh (see README).")
 
 
 def load_secret_file(path: str | None) -> None:

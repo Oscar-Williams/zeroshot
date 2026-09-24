@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import json
 import queue
+import re
+import shlex
 import shutil
 import subprocess
 import threading
@@ -22,6 +24,7 @@ from .util import (
     iter_json_objects,
     log,
     read_json,
+    run,
     write_json,
 )
 
@@ -59,8 +62,38 @@ CODEX_HOME_SURFACES = (
     "find skills prompts rules hooks plugins -path skills/.system -prune -o -type f -print; } 2>/dev/null | LC_ALL=C sort | "
     "while read -r f; do echo \"$f $(sha256sum < \"$f\" | cut -c1-16)\"; done"
 )
+# A process that docker exec starts directly stays dumpable even when its executable is
+# execute-only, so its /proc/<pid>/environ is readable by the agent user; started by a shell's
+# exec it is not. The zeroshot submitter is the one process that gets the key from docker exec.
+EXEC_NONDUMPABLE = ("sh", "-c", 'exec "$@"', "sh")
+# Zeroshot resolves `codex` through the PATH it was started with, for every node. The task image
+# puts the world-writable /usr/local/cargo/bin first, where a node could plant a `codex` that the
+# next node would run with the key, so Zeroshot gets root-owned directories only; tool shells keep
+# the image's PATH through the Codex config. The harness also calls Zeroshot by absolute path.
+ZEROSHOT = "/usr/local/bin/zeroshot"
+SUBMIT_PATH = "/usr/local/bin:/usr/bin:/bin"
+# Terminal reasons that mean the Zeroshot runtime itself failed; the attempt counts as an
+# infrastructure error (re-run once) rather than an outcome.
+INFRASTRUCTURE_TERMINAL = frozenset({"runtime_lost", "runtime_failed"})
 FINISH_GRACE_SECONDS = 900
 NEUTRAL_TITLE = "programbench attempt"
+
+
+def archive(container: str, user: str, tar: list[str], dest: Path, timeout: int = 1800) -> tuple[int, str]:
+    """Stream a tar archive from the container into ``dest``; return (tar status, warnings).
+
+    GNU tar exits 1 when files changed while it read them (the archive is still valid), but
+    docker exec also exits 1 when the container is gone, so tar reports its own status."""
+    script = shlex.join(tar) + '; s=$?; echo "zsbench-tar-status=$s" >&2; exit $s'
+    stderr = docker_to_file(["exec", "-u", user, container, "sh", "-c", script], dest, timeout=timeout, ok_codes=TAR_OK)
+    status = re.search(r"zsbench-tar-status=(\d+)", stderr)
+    if not status:
+        dest.unlink(missing_ok=True)
+        raise RuntimeError(f"tar did not run: {stderr.strip()[-300:]}")
+    with dest.open("rb") as f:
+        if f.read(2) != b"\x1f\x8b":
+            raise RuntimeError(f"{dest.name} is empty or not gzip")
+    return int(status.group(1)), re.sub(r"zsbench-tar-status=\d+\n?", "", stderr)
 
 
 def run_files(exp: Experiment, arm: str) -> dict[str, Any]:
@@ -110,6 +143,9 @@ class Attempt:
             return read_json(self.dir / "attempt.json")
         if self._stop_requested.is_set():
             return {"label": self.spec.label, "arm": self.spec.arm, "state": "skipped", "wall_seconds": 0}
+        if self._rerun_limit_reached():
+            log(f"[{self.spec.label}] ended in an error after one re-run already; not re-running (pre-registered limit)")
+            return read_json(self.dir / "attempt.json")
         if self.dir.exists():
             shutil.move(str(self.dir), str(self.dir.with_name(f"{self.dir.name}.discarded-{int(time.time())}")))
         self.dir.mkdir(parents=True)
@@ -125,7 +161,13 @@ class Attempt:
             run_id = self._submit()
             self._follow(run_id)
             self._finish(run_id)
-            self.meta["state"] = "stopped" if self.meta.get("force_stopped") == "stop requested" else "complete"
+            reason = (self.meta.get("terminal") or {}).get("reason")
+            if reason in INFRASTRUCTURE_TERMINAL:
+                self.meta["state"], self.meta["error"] = "error", f"the Zeroshot runtime ended the run: {reason}"
+            elif reason == "force_stopped" and self.meta.get("force_stopped") == "stop requested":
+                self.meta["state"] = "stopped"
+            else:
+                self.meta["state"] = "complete"
         except Exception as error:  # keep whatever the run produced; the error is part of the record
             self.meta["state"] = "error"
             self.meta["error"] = f"{type(error).__name__}: {error}"
@@ -143,6 +185,15 @@ class Attempt:
                 docker("rm", "-f", self.name, check=False)
                 self.network.down()
         return self.meta
+
+    def _rerun_limit_reached(self) -> bool:
+        """Attempts that end in an infrastructure error are re-run once (stopped ones are
+        resumed without limit): refuse a second re-run after an error."""
+        path = self.dir / "attempt.json"
+        if not path.exists() or read_json(path).get("state") != "error":
+            return False
+        earlier = [d / "attempt.json" for d in self.dir.parent.glob(f"{self.dir.name}.discarded-*")]
+        return any(p.exists() and read_json(p).get("state") == "error" for p in earlier)
 
     def request_stop(self) -> None:
         self._stop_requested.set()
@@ -186,8 +237,8 @@ class Attempt:
 
     def _submit(self) -> str:
         receipt_text = docker(
-            "exec", "-u", "agent", "-w", "/workspace", "-e", SECRET_ENV, self.name,
-            "zeroshot", "run", "--title", NEUTRAL_TITLE,
+            "exec", "-u", "agent", "-w", "/workspace", "-e", SECRET_ENV, "-e", f"PATH={SUBMIT_PATH}", self.name,
+            *EXEC_NONDUMPABLE, ZEROSHOT, "run", "--title", NEUTRAL_TITLE,
             "--graph", f"{RUN_DIR}/graph.json", "--input", f"{RUN_DIR}/input.json",
             "--runtime-config", f"{RUN_DIR}/runtime.json",
             "--submission-key", f"{self.exp.id}-{self.spec.index:02d}", "--detach",
@@ -204,7 +255,7 @@ class Attempt:
         except json.JSONDecodeError:
             pass
         if not run_id:
-            runs = json.loads(docker("exec", "-u", "agent", self.name, "zeroshot", "list"))["runs"]
+            runs = json.loads(docker("exec", "-u", "agent", self.name, ZEROSHOT, "list", timeout=300))["runs"]
             if len(runs) != 1:
                 raise RuntimeError(f"cannot identify the run id from the receipt: {receipt_text[:500]!r}")
             run_id = runs[0]["runId"]
@@ -223,14 +274,23 @@ class Attempt:
     def _check_harness(self) -> None:
         """Compare the harness fingerprint at the end, and after every node, with the start."""
         try:
-            after = [self._harness_fingerprint(), *(s["harness_fingerprint"] for s in self.meta["snapshots"].values() if s.get("harness_fingerprint"))]
-            self.meta["harness_unchanged"] = bool(self.meta.get("harness_fingerprint")) and all(f == self.meta["harness_fingerprint"] for f in after)
+            after = [self._harness_fingerprint(), *(s.get("harness_fingerprint") for s in self.meta["snapshots"].values())]
+            if not self.meta.get("harness_fingerprint") or None in after:
+                self.meta["harness_unchanged"] = None  # a probe failed: integrity not checked
+            else:
+                self.meta["harness_unchanged"] = all(f == self.meta["harness_fingerprint"] for f in after)
             self.meta["codex_home_surfaces_end"] = self._codex_home_surfaces()
         except Exception as error:
             self.meta["harness_check_error"] = f"{type(error).__name__}: {error}"
 
     def _container_running(self) -> bool:
-        return docker("inspect", "-f", "{{.State.Running}}", self.name, check=False).strip() == "true"
+        """Whether the attempt container runs; a failing inspect is retried, not read as "no"."""
+        for _ in range(3):
+            result = run(["docker", "inspect", "-f", "{{.State.Running}}", self.name], check=False, timeout=60)
+            if result.returncode == 0:
+                return result.stdout.decode().strip() == "true"
+            time.sleep(5)
+        return False
 
     def _follow(self, run_id: str) -> None:
         """Follow ``zeroshot watch`` status projections until the run finishes.
@@ -249,7 +309,7 @@ class Attempt:
         projections = self.dir / "watch.ndjson"
         while not finished:
             lines: queue.Queue = queue.Queue()
-            args = ["docker", "exec", "-u", "agent", self.name, "zeroshot", "watch", run_id, *(["--after", cursor] if cursor else [])]
+            args = ["docker", "exec", "-u", "agent", self.name, ZEROSHOT, "watch", run_id, *(["--after", cursor] if cursor else [])]
             proc = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
 
             def pump(proc: subprocess.Popen = proc, lines: queue.Queue = lines) -> None:
@@ -261,10 +321,10 @@ class Attempt:
             with projections.open("ab") as out:
                 while True:
                     now = time.time()
-                    if not forced and (now > deadline or self._stop_requested.is_set()):
+                    if not forced and not finished and (now > deadline or self._stop_requested.is_set()):
                         reason = "stop requested" if self._stop_requested.is_set() else "attempt time limit reached"
                         log(f"[{self.spec.label}] {reason}; force-stopping run")
-                        docker("exec", "-u", "agent", self.name, "zeroshot", "force-stop", run_id, check=False, timeout=300)
+                        docker("exec", "-u", "agent", self.name, ZEROSHOT, "force-stop", run_id, check=False, timeout=300)
                         self.meta["force_stopped"] = reason
                         self.meta["force_stopped_at"] = now
                         forced = True
@@ -308,13 +368,13 @@ class Attempt:
         """Paths (read as root) that hold the reference binary, found by size and hash."""
         size, digest = self.meta["reference_size"], self.meta["reference_sha256"]
         script = f"find /workspace /tmp /home/agent -xdev -type f -size {size}c -exec sha256sum {{}} + 2>/dev/null | grep '^{digest} ' | cut -c67-"
-        return [p for p in docker("exec", "-u", "root", self.name, "sh", "-c", script, check=False).splitlines() if p]
+        return [p for p in docker("exec", "-u", "root", self.name, "sh", "-c", script, check=False, timeout=600).splitlines() if p]
 
     def _snapshot(self, label: str) -> None:
         started = time.time()
         record: dict[str, Any] = {"started_at": started}
         try:
-            warnings = docker_to_file(["exec", "-u", "agent", self.name, *WORKSPACE_TAR], self.dir / "snapshots" / f"{label}.tar.gz", timeout=1800, ok_codes=TAR_OK)
+            record["tar_status"], warnings = archive(self.name, "agent", WORKSPACE_TAR, self.dir / "snapshots" / f"{label}.tar.gz")
             if warnings.strip():
                 self.meta["snapshot_warnings"][label] = warnings
         except Exception as error:  # a snapshot must never cost the run
@@ -330,7 +390,7 @@ class Attempt:
         log(f"[{self.spec.label}] snapshot {label} ({record['seconds']}s){' ERROR ' + record['error'] if 'error' in record else ''}")
 
     def _finish(self, run_id: str) -> None:
-        (self.dir / "status.json").write_text(docker("exec", "-u", "agent", self.name, "zeroshot", "status", run_id, check=False))
+        (self.dir / "status.json").write_text(docker("exec", "-u", "agent", self.name, ZEROSHOT, "status", run_id, check=False, timeout=300))
         self._check_harness()
         self._collect()
         recorded = ledger.events(self.dir / "trajectories.tar.gz")
@@ -348,10 +408,10 @@ class Attempt:
             log(f"[{self.spec.label}] check {i}: {check.get('verdict') or check.get('status')}")
 
     def _collect(self) -> None:
-        warnings = docker_to_file(["exec", "-u", "agent", self.name, *WORKSPACE_TAR], self.dir / "submission.tar.gz", timeout=1800, ok_codes=TAR_OK)
+        self.meta["submission_tar_status"], warnings = archive(self.name, "agent", WORKSPACE_TAR, self.dir / "submission.tar.gz")
         if warnings.strip():
             self.meta["submission_warnings"] = warnings
-        docker_to_file(["exec", "-u", "root", self.name, *TRAJECTORY_TAR], self.dir / "trajectories.tar.gz", timeout=1800, ok_codes=TAR_OK)
+        archive(self.name, "root", TRAJECTORY_TAR, self.dir / "trajectories.tar.gz")
         git_log = docker("exec", "-u", "agent", self.name, "git", "-C", "/workspace", "log", "--oneline", "-50", check=False)
         (self.dir / "workspace-git-log.txt").write_text(git_log)
 
@@ -359,7 +419,7 @@ class Attempt:
         try:
             if self._container_running():
                 if self.meta.get("run_id"):
-                    docker("exec", "-u", "agent", self.name, "zeroshot", "force-stop", self.meta["run_id"], check=False, timeout=300)
+                    docker("exec", "-u", "agent", self.name, ZEROSHOT, "force-stop", self.meta["run_id"], check=False, timeout=300)
                 if self.meta.get("harness_fingerprint"):
                     self._check_harness()
                 self._collect()

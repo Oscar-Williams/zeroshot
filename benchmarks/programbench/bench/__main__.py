@@ -98,13 +98,13 @@ def _preflight(exp: config.Experiment, results: Path) -> None:
     if cpus < float(res["cpus"]):
         sys.exit(f"host has {cpus:g} CPUs; each attempt needs {res['cpus']}")
     if res["concurrency"] * float(res["cpus"]) > cpus:
-        log(f"WARNING: {res['concurrency']} x {res['cpus']} CPUs oversubscribes a {cpus:g}-CPU host")
+        sys.exit(f"{res['concurrency']} concurrent attempts x {res['cpus']} CPUs oversubscribes this {cpus:g}-CPU host; lower resources.concurrency in the experiment file")
     needed = res["concurrency"] * _memory_bytes(res["memory"]) + 4 * GIB
     if needed > memory:
         sys.exit(f"host has {memory / GIB:.1f} GiB; {res['concurrency']} x {res['memory']} plus 4 GiB headroom needs {needed / GIB:.1f} GiB")
     free = shutil.disk_usage(results).free
-    if free < 30 * GIB:
-        sys.exit(f"only {free / GIB:.1f} GiB free under {results}; need at least 30 GiB")
+    if free < 60 * GIB:
+        sys.exit(f"only {free / GIB:.1f} GiB free under {results}; need at least 60 GiB")
 
 
 def _prepare(exp: config.Experiment, results: Path, allow_mixed: bool) -> tuple[str, str, dict]:
@@ -143,23 +143,31 @@ def _run_attempts(exp: config.Experiment, results: Path, agent_image: str, proxy
     stopped = False
 
     def stop(*_: object) -> None:
+        # Only set flags: a signal can land while the main thread holds the log lock.
         nonlocal stopped
         stopped = True
-        log("stop requested: running attempts are force-stopped, queued attempts are skipped")
         for attempt in attempts:
             attempt.request_stop()
 
-    signal.signal(signal.SIGTERM, stop)
-    signal.signal(signal.SIGINT, stop)
-    with ThreadPoolExecutor(max_workers=exp.resources["concurrency"]) as pool:
-        futures = {pool.submit(a.run): a for a in attempts}  # submitted in the pre-registered order
-        for future in as_completed(futures):
-            try:
-                meta = future.result()
-            except Exception as error:  # an attempt records its own errors; this is the runner failing around it
-                log(f"[{futures[future].spec.label}] RUNNER ERROR {type(error).__name__}: {error}")
-                continue
-            log(f"[{meta['label']}] {meta['state']} after {meta.get('wall_seconds', 0) / 60:.1f} min")
+    previous = {sig: signal.signal(sig, stop) for sig in (signal.SIGTERM, signal.SIGINT)}
+    try:
+        with ThreadPoolExecutor(max_workers=exp.resources["concurrency"]) as pool:
+            futures = {pool.submit(a.run): a for a in attempts}  # submitted in the pre-registered order
+            announced = False
+            for future in as_completed(futures):
+                if stopped and not announced:
+                    log("stop requested: running attempts are force-stopped, queued attempts are skipped")
+                    announced = True
+                try:
+                    meta = future.result()
+                except Exception as error:  # an attempt records its own errors; this is the runner failing around it
+                    log(f"[{futures[future].spec.label}] RUNNER ERROR {type(error).__name__}: {error}")
+                    continue
+                log(f"[{meta['label']}] {meta['state']} after {meta.get('wall_seconds', 0) / 60:.1f} min")
+    finally:
+        # Outside the attempt phase a stop ends the runner at once (it runs under an init process).
+        for sig, handler in previous.items():
+            signal.signal(sig, handler)
     return stopped
 
 
@@ -187,14 +195,26 @@ def _guard_secrets(results: Path, summary: dict) -> None:
     marker.unlink(missing_ok=True)
 
 
+def _record_invocation(results: Path, exp: config.Experiment, command: str) -> None:
+    """Re-scoring runs the current code on old attempts: record which code did it."""
+    manifest_path = results / "manifest.json"
+    if manifest_path.exists():
+        manifest = read_json(manifest_path)
+        manifest["invocations"] = [*manifest.get("invocations", []), {"at": time.time(), "command": command, **_provenance(exp)}]
+        write_json(manifest_path, manifest)
+
+
 def cmd_eval(exp: config.Experiment, force: bool) -> None:
+    _refuse_while_another_runner_runs("eval")
     results = _results(exp)
+    _record_invocation(results, exp, "eval")
     evaluate.evaluate(exp, results, CACHE, force=force)
     cmd_report(exp)
 
 
 def cmd_report(exp: config.Experiment) -> None:
     results = _results(exp)
+    _record_invocation(results, exp, "report")
     summary = report.build(exp, results)
     print((results / "summary.md").read_text())
     _guard_secrets(results, summary)
@@ -203,6 +223,8 @@ def cmd_report(exp: config.Experiment) -> None:
 def cmd_smoke(exp: config.Experiment) -> None:
     require_secret()
     results = _results(exp)
+    if any((results / "attempts").glob("*/attempt.json")):
+        sys.exit(f"{results} already holds a smoke test; move it aside to run the smoke test again")
     agent_image, proxy_image, _ = _prepare(exp, results, allow_mixed=False)
     s = smoke.Smoke(exp, results, CACHE, agent_image, proxy_image)
     s.isolation()
@@ -219,7 +241,16 @@ def cmd_smoke(exp: config.Experiment) -> None:
         sys.exit(1)
 
 
+def _refuse_while_another_runner_runs(command: str) -> None:
+    """`cleanup` would destroy a live runner's attempts, and `eval` would compete with them for CPUs."""
+    own = socket.gethostname()
+    others = [c for c in docker("ps", "-q", "--filter", "label=zsbench.runner=1").split() if not own.startswith(c) and not c.startswith(own)]
+    if others:
+        sys.exit(f"another zsbench runner is running ({', '.join(others)}); stop it before `{command}`")
+
+
 def cmd_cleanup(exp: config.Experiment) -> None:
+    _refuse_while_another_runner_runs("cleanup")
     for container in docker("ps", "-aq", "--filter", f"label=zsbench.experiment={exp.id}").split():
         docker("rm", "-f", container, check=False)
     for network in docker("network", "ls", "-q", "--filter", f"label=zsbench.experiment={exp.id}").split():

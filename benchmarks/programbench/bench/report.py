@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import os
 import statistics
 import tarfile
 from collections import Counter
@@ -10,19 +11,28 @@ from pathlib import Path
 from typing import Any
 
 from . import accounting, audit
-from .config import Experiment
-from .evaluate import load_scores
+from .config import Experiment, code_digest
+from .evaluate import archive_id, infrastructure_error, load_scores
 from .util import read_json, secret_values, write_json
 
 REQUIRED_LOOP_RUNS = 5
+# Build 1 must end normally, or at its node time limit (it used its full budget, as a single-arm
+# build that hits the same limit does); a crash or malformed response cuts the baseline short.
+BUILD_1_OUTCOMES = ("verified", "timeout")
 
 
 def codex_home_changes(meta: dict[str, Any]) -> list[str]:
     """Instruction and hook files in ~/.codex that differ from the attempt's start, at any
     snapshot or at the end."""
-    start = set(meta.get("codex_home_surfaces") or [])
-    seen = [*(s.get("codex_home_surfaces") or [] for s in (meta.get("snapshots") or {}).values() if isinstance(s, dict)), meta.get("codex_home_surfaces_end") or []]
-    return sorted({line for lines in seen for line in lines} - start)
+    if meta.get("codex_home_surfaces") is None:
+        return ["not checked at the start"]
+    start = set(meta["codex_home_surfaces"])
+    snapshots = {label: s for label, s in (meta.get("snapshots") or {}).items() if isinstance(s, dict)}
+    missing = [f"not checked after {label}" for label, s in snapshots.items() if s.get("codex_home_surfaces") is None]
+    if meta.get("codex_home_surfaces_end") is None:
+        missing.append("not checked at the end")
+    seen = [*(s.get("codex_home_surfaces") or [] for s in snapshots.values()), meta.get("codex_home_surfaces_end") or []]
+    return sorted({line for lines in seen for line in lines} - start) + missing
 
 
 def _pct(value: float | None) -> str:
@@ -51,12 +61,12 @@ def _eligibility(record: dict[str, Any], expected_tests: int | None) -> list[str
             reasons.append(f"{name} not scored")
         elif expected_tests and score.get("scored_tests") != expected_tests:
             reasons.append(f"{name} scored {score.get('scored_tests')} of {expected_tests} tests")
-        if score.get("error_code") or score.get("test_branch_errors"):
-            reasons.append(f"{name} eval error {score.get('error_code') or score.get('test_branch_errors')}")
+        if score.get("score") is not None and infrastructure_error(score):
+            reasons.append(f"{name} evaluation failed: {infrastructure_error(score)}")
         if record.get("reference_sha256") and score.get("executable_hash") == record["reference_sha256"]:
             reasons.append(f"{name} built executable is the reference")
     first_build = (record.get("build_outcomes") or [None])[0]
-    if first_build != "verified":
+    if first_build not in BUILD_1_OUTCOMES:
         reasons.append(f"build 1 ended {first_build}")
     if "error" in ((record.get("snapshots") or {}).get("build-1") or {}):
         reasons.append("build-1 snapshot failed")
@@ -70,7 +80,7 @@ def _eligibility(record: dict[str, Any], expected_tests: int | None) -> list[str
         reasons.append("Codex loaded AGENTS.md instructions left by a node")
     if record.get("codex_home_changes"):
         reasons.append(f"a node left files for later Codex sessions: {', '.join(record['codex_home_changes'])[:200]}")
-    if ((commands.get("rule_counts_by_turn") or {}).get("build.turn1") or {}).get("harness_internals"):
+    if ((commands.get("rule_counts_by_round") or {}).get("build.round1") or {}).get("harness_internals"):
         reasons.append("audit: builder read harness internals in round 1")
     if record.get("reference_copies_in_final") or record.get("reference_copies_in_first_build"):
         reasons.append("a scored archive contains the reference binary")
@@ -90,48 +100,11 @@ def build(exp: Experiment, results: Path) -> dict[str, Any]:
     for directory in sorted((results / "attempts").glob("*")):
         if not directory.is_dir() or "." in directory.name or not (directory / "attempt.json").exists():
             continue
-        meta = read_json(directory / "attempt.json")
-        label = meta["label"]
-        rounds = {k.split("__", 1)[1]: v for k, v in scores.items() if k.startswith(f"{label}__")}
-        usage = accounting.usage(directory)
-        costs = {node: round(accounting.cost(t, exp.pricing), 4) for node, t in usage["nodes"].items()}
-        first_turn_cost = round(accounting.cost(usage["first_build_turn"], exp.pricing), 4)
-        snapshots = {k: v for k, v in (meta.get("snapshots") or {}).items() if isinstance(v, dict)}
-        snapshot_order = sorted(snapshots, key=lambda k: snapshots[k].get("started_at") or 0)
-        archived_config = _archived_codex_config(directory / "trajectories.tar.gz")
-        record = {
-            "label": label,
-            "arm": meta["arm"],
-            "state": meta.get("state"),
-            "error": meta.get("error"),
-            "terminal": meta.get("terminal"),
-            "force_stopped": meta.get("force_stopped"),
-            "builds": meta.get("builds"),
-            "checks": meta.get("checks"),
-            "build_outcomes": [b.get("code") or b.get("status") for b in meta.get("build_outcomes", [])],
-            "verdicts": [v.get("verdict") or f"{v.get('status')}:{v.get('code')}" for v in meta.get("verdicts", [])],
-            "wall_seconds": meta.get("wall_seconds"),
-            "rounds": rounds,
-            "score_final": (rounds.get("final") or {}).get("score"),
-            "score_first_build": (rounds.get("build-1") or {}).get("score"),
-            "snapshots": snapshots,
-            "tokens": usage,
-            "cost_usd": costs,
-            "cost_first_build_turn_usd": first_turn_cost,
-            "commands": audit.command_audit(directory / "trajectories.tar.gz"),
-            "checker_edits": audit.checker_edits(directory, snapshot_order),
-            "reference_sha256": meta.get("reference_sha256"),
-            "harness_unchanged": meta.get("harness_unchanged"),
-            "codex_home_changes": codex_home_changes(meta),
-            "reference_copies_in_final": audit.reference_copies(directory / "submission.tar.gz", meta.get("reference_sha256")),
-            "reference_copies_in_first_build": audit.reference_copies(directory / "snapshots" / "build-1.tar.gz", meta.get("reference_sha256")),
-            "codex_config_unchanged": None if archived_config is None or not manifest.get("codex_config") else archived_config == manifest["codex_config"],
-        }
-        final, first = rounds.get("final") or {}, rounds.get("build-1") or {}
-        if final.get("passed") is not None and first.get("passed") is not None:
-            record["gain_tests"] = final["passed"] - first["passed"]
-        record["ineligible_reasons"] = _eligibility(record, expected_tests) if record["arm"] == "loop" else []
-        attempts.append(record)
+        try:
+            attempts.append(_attempt_record(exp, directory, scores, manifest, expected_tests))
+        except Exception as error:  # one unreadable artifact must not sink the whole summary
+            meta = read_json(directory / "attempt.json")
+            attempts.append(_unreadable_record(meta, f"{type(error).__name__}: {error}"))
     summary = {
         "experiment": exp.id,
         "description": exp.raw.get("description"),
@@ -146,10 +119,74 @@ def build(exp: Experiment, results: Path) -> dict[str, Any]:
         "secrets": _secrets(results),
         "egress": audit.proxy_audit("\n".join((d / "proxy.log").read_text() for d in sorted((results / "attempts").glob("*")) if (d / "proxy.log").exists())),
         "provenance": manifest.get("provenance"),
+        "scored_by": _scoring_code(),
     }
     write_json(results / "summary.json", summary)
     (results / "summary.md").write_text(markdown(summary))
     return summary
+
+
+def _attempt_record(exp: Experiment, directory: Path, scores: dict[str, Any], manifest: dict[str, Any], expected_tests: int | None) -> dict[str, Any]:
+    meta = read_json(directory / "attempt.json")
+    label = meta["label"]
+    rounds = {k.split("__", 1)[1]: v for k, v in scores.items() if k.startswith(f"{label}__")}
+    for name, score in rounds.items():
+        archive = directory / "submission.tar.gz" if name == "final" else directory / "snapshots" / f"{name}.tar.gz"
+        if score.get("archive_id") and (not archive.exists() or archive_id(archive) != score["archive_id"]):
+            rounds[name] = {"score": None, "error_code": "stale_score", "error_details": "scored a different archive; run `eval`"}
+    usage = accounting.usage(directory)
+    costs = {node: round(accounting.cost(t, exp.pricing), 4) for node, t in usage["nodes"].items()}
+    first_build_cost = None if usage["first_build_round"] is None else round(accounting.cost(usage["first_build_round"], exp.pricing), 4)
+    snapshots = {k: v for k, v in (meta.get("snapshots") or {}).items() if isinstance(v, dict)}
+    snapshot_order = sorted(snapshots, key=lambda k: snapshots[k].get("started_at") or 0)
+    archived_config = _archived_codex_config(directory / "trajectories.tar.gz")
+    record = {
+        "label": label,
+        "arm": meta["arm"],
+        "state": meta.get("state"),
+        "error": meta.get("error"),
+        "terminal": meta.get("terminal"),
+        "force_stopped": meta.get("force_stopped"),
+        "builds": meta.get("builds"),
+        "checks": meta.get("checks"),
+        "build_outcomes": [b.get("code") or b.get("status") for b in meta.get("build_outcomes", [])],
+        "verdicts": [v.get("verdict") or f"{v.get('status')}:{v.get('code')}" for v in meta.get("verdicts", [])],
+        "wall_seconds": meta.get("wall_seconds"),
+        "rounds": rounds,
+        "score_final": (rounds.get("final") or {}).get("score"),
+        "score_first_build": (rounds.get("build-1") or {}).get("score"),
+        "snapshots": snapshots,
+        "tokens": usage,
+        "cost_usd": costs,
+        "cost_first_build_usd": first_build_cost,
+        "commands": audit.command_audit(directory / "trajectories.tar.gz"),
+        "checker_edits": audit.checker_edits(directory, snapshot_order),
+        "reference_sha256": meta.get("reference_sha256"),
+        "harness_unchanged": meta.get("harness_unchanged"),
+        "codex_home_changes": codex_home_changes(meta),
+        "reference_available_after_build_1": bool((snapshots.get("build-1") or {}).get("reference_at")) if "build-1" in snapshots else None,
+        "reference_copies_in_final": audit.reference_copies(directory / "submission.tar.gz", meta.get("reference_sha256")),
+        "reference_copies_in_first_build": audit.reference_copies(directory / "snapshots" / "build-1.tar.gz", meta.get("reference_sha256")),
+        "codex_config_unchanged": None if archived_config is None or not manifest.get("codex_config") else archived_config == manifest["codex_config"],
+    }
+    final, first = rounds.get("final") or {}, rounds.get("build-1") or {}
+    if final.get("passed") is not None and first.get("passed") is not None:
+        record["gain_tests"] = final["passed"] - first["passed"]
+    record["ineligible_reasons"] = _eligibility(record, expected_tests) if record["arm"] == "loop" else []
+    return record
+
+
+def _unreadable_record(meta: dict[str, Any], error: str) -> dict[str, Any]:
+    """A minimal record for an attempt whose artifacts could not be read; never H1-eligible."""
+    return {
+        "label": meta.get("label"), "arm": meta.get("arm"), "state": meta.get("state"), "error": meta.get("error"),
+        "report_error": error, "terminal": meta.get("terminal"), "force_stopped": meta.get("force_stopped"),
+        "builds": meta.get("builds"), "checks": meta.get("checks"), "build_outcomes": [], "verdicts": [],
+        "wall_seconds": meta.get("wall_seconds"), "rounds": {}, "score_final": None, "score_first_build": None,
+        "snapshots": {}, "tokens": {"nodes": {}, "sessions": []}, "cost_usd": {}, "cost_first_build_usd": None,
+        "commands": {}, "checker_edits": [], "reference_copies_in_final": [], "codex_config_unchanged": None,
+        "ineligible_reasons": [f"artifacts unreadable: {error}"] if meta.get("arm") == "loop" else [],
+    }
 
 
 def _discarded(results: Path, pricing: dict[str, Any]) -> list[dict[str, Any]]:
@@ -174,6 +211,11 @@ def _total_cost(usage: dict[str, Any], pricing: dict[str, Any]) -> float | None:
     """None when no transcript was recovered: unknown, not free."""
     total = usage["nodes"].get("total")
     return None if total is None else round(accounting.cost(total, pricing), 4)
+
+
+def _scoring_code() -> dict[str, Any]:
+    """The code that produced this summary, which can differ from the code that ran the attempts."""
+    return {"vcs_ref": os.environ.get("ZSBENCH_VCS_REF", "unknown"), "vcs_dirty": os.environ.get("ZSBENCH_VCS_DIRTY", "unknown"), "code_digest": code_digest()}
 
 
 def _secrets(results: Path) -> dict[str, Any]:
@@ -263,7 +305,7 @@ def markdown(summary: dict[str, Any]) -> str:
             flags.append("web_search")
         if any(r["workspace_changes"] for r in a["checker_edits"]):
             flags.append("checker_edited_sources")
-        if a.get("force_stopped"):
+        if a.get("force_stopped") and (a.get("terminal") or {}).get("reason") == "force_stopped":
             flags.append(f"force-stopped ({a['force_stopped']})")
         if a.get("error"):
             flags.append(f"error: {a['error'][:80]}")
@@ -273,10 +315,14 @@ def markdown(summary: dict[str, Any]) -> str:
             flags.append("harness modified")
         if a.get("codex_home_changes") or a["commands"].get("agents_md_loaded"):
             flags.append("instructions left in ~/.codex")
+        if a.get("reference_available_after_build_1") is False:
+            flags.append("reference gone after build 1")
+        if any(s.get("usage_decreased") for s in a["tokens"].get("sessions", [])):
+            flags.append("usage decreased in a thread")
         for name in ("build-1", "final"):
             score = (a["rounds"].get(name) or {})
             if score.get("error_code") or score.get("test_branch_errors"):
-                flags.append(f"{name} eval error: {score.get('error_code') or 'test branch errors'}")
+                flags.append(f"{name}: {infrastructure_error(score) or score.get('error_code')}")
         if a.get("ineligible_reasons"):
             flags.append("H1-ineligible")
         cost = a["cost_usd"].get("total")
@@ -303,6 +349,8 @@ def markdown(summary: dict[str, Any]) -> str:
             lines.append(f"- {label} ineligible: {'; '.join(reasons)}")
     b = summary["baseline_check"]
     lines += ["", f"Baseline check: single-arm finals mean {_pct(b['single_final_mean'])} vs loop first builds mean {_pct(b['loop_first_build_mean'])}."]
+    p, scored = summary.get("provenance") or {}, summary.get("scored_by") or {}
+    lines += ["", f"Attempts ran at commit {p.get('vcs_ref', 'unknown')} (dirty={p.get('vcs_dirty', 'unknown')}); scored at {scored.get('vcs_ref', 'unknown')} (dirty={scored.get('vcs_dirty', 'unknown')})."]
     s = summary["secrets"]
     lines += ["", f"Secret scan: literal key checked={s['checked_literal_key']}, hits={len(s['literal_key_hits'])}{' — DO NOT PUBLISH' if s['literal_key_hits'] else ''}."]
     if summary.get("egress"):

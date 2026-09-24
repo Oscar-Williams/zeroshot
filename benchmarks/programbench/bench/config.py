@@ -79,6 +79,15 @@ class Experiment:
         return h.hexdigest()
 
 
+def code_digest() -> str:
+    """Hash of every benchmark file that shapes a run or its scoring (without an experiment)."""
+    h = hashlib.sha256()
+    for path in code_files():
+        h.update(str(path.relative_to(ROOT)).encode())
+        h.update(path.read_bytes())
+    return h.hexdigest()
+
+
 def code_files() -> list[Path]:
     """Files that shape a run: everything in the benchmark except results, tests and hidden files."""
     skip = {"results", "tests", "__pycache__"}
