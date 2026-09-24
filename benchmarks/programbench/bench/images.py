@@ -68,14 +68,17 @@ def build_agent(exp: Experiment, cache: Path) -> tuple[str, dict[str, str]]:
     pin = pins()
     ensure_image(exp.task_image)
     config = codex_config(image_env(exp.task_image))
+    adjustments = json.dumps({"reference_path": exp.reference_path, "doc_fixes": exp.doc_fixes}, sort_keys=True, indent=2)
     digest = hashlib.sha256()
     digest.update(exp.task_image.encode())
     digest.update(config.encode())
-    digest.update((ROOT / "agent" / "Dockerfile").read_bytes())
+    digest.update(adjustments.encode())
+    for name in ("Dockerfile", "prepare-task.py"):
+        digest.update((ROOT / "agent" / name).read_bytes())
     for tool in ("zeroshot", "codex"):
         digest.update(pin[tool]["sha256"].encode())
     tag = f"zsbench-agent:{digest.hexdigest()[:16]}"
-    info = {"tag": tag, "task_image": exp.task_image, "codex_config": config}
+    info = {"tag": tag, "task_image": exp.task_image, "codex_config": config, "task_adjustments": json.loads(adjustments)}
     if docker("image", "inspect", tag, check=False).strip() not in ("", "[]"):
         return tag, info
     context = cache / "agent-context" / tag.split(":", 1)[1]
@@ -87,7 +90,9 @@ def build_agent(exp: Experiment, cache: Path) -> tuple[str, dict[str, str]]:
     with tarfile.open(codex) as tar:
         tar.extractall(context / "codex-package", filter="data")
     shutil.copy(ROOT / "agent" / "Dockerfile", context / "Dockerfile")
+    shutil.copy(ROOT / "agent" / "prepare-task.py", context / "prepare-task.py")
     (context / "codex-config.toml").write_text(config)
+    (context / "task-adjustments.json").write_text(adjustments)
     log(f"building {tag} from {exp.task_image}")
     docker("build", "--quiet", "--build-arg", f"TASK_IMAGE={exp.task_image}", "-t", tag, str(context), timeout=3600)
     return tag, info

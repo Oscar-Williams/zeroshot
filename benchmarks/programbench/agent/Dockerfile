@@ -7,6 +7,11 @@ COPY --chmod=0755 zeroshot /usr/local/bin/zeroshot
 # (codex-code-mode-host for tool calls, rg, bwrap) relative to its own executable.
 COPY codex-package /opt/codex
 COPY codex-config.toml /home/agent/.codex/config.toml
+# The experiment's declared task adjustments (reference location, documentation fixes); no-ops for
+# an unmodified ProgramBench task.
+COPY task-adjustments.json prepare-task.py /tmp/zsbench-prepare/
+RUN python3 /tmp/zsbench-prepare/prepare-task.py /tmp/zsbench-prepare/task-adjustments.json \
+    && rm -rf /tmp/zsbench-prepare
 # Zeroshot and Codex hold the API key in their process environment and memory. Execute-only,
 # root-owned executables make the kernel mark those processes non-dumpable, so the agent user's
 # tool commands cannot read /proc/<pid>/environ or /proc/<pid>/mem (the same protection that keeps

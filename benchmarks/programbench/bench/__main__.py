@@ -129,6 +129,7 @@ def _prepare(exp: config.Experiment, results: Path, allow_mixed: bool) -> tuple[
         "task_image_id": docker("image", "inspect", exp.task_image, "--format", "{{.Id}}").strip(),
         "eval_image": f"{exp.task_image.split(':')[0]}:{evaluate.eval_image_tag(exp)}",
         "codex_config": info["codex_config"],
+        "task_adjustments": info["task_adjustments"],
         "proxy_image": proxy_image,
         "prompts": {name: config.prompt(name) for name in ("builder", "checker", "task")},
         "runner": {"python": platform.python_version()},

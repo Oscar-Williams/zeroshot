@@ -122,6 +122,26 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(set(order[:2]), {"loop", "single"})
         self.assertFalse(any(a == b == "single" for a, b in zip(order, order[1:], strict=False)))
 
+    def test_reference_can_move_out_of_the_workspace_only(self):
+        v2 = config.load("experiments/luna-xhigh-svgbob-v2.json")
+        self.assertEqual(v2.reference_path, "/reference/executable")
+        self.assertEqual(len(v2.doc_fixes), 4)
+        for bad in ("/workspace/ref/executable", "reference/executable"):
+            with self.assertRaises(ValueError):
+                self._load({**EXPERIMENT.raw, "task": {**EXPERIMENT.raw["task"], "reference_path": bad}})
+        with self.assertRaises(ValueError):
+            self._load({**EXPERIMENT.raw, "task": {**EXPERIMENT.raw["task"], "doc_fixes": [{"file": "../etc/passwd", "old": "a", "new": "b"}]}})
+
+    def test_task_statement_points_at_the_moved_reference(self):
+        self.assertEqual(config.task_statement(EXPERIMENT), config.prompt("task"))  # unchanged upstream wording
+        moved = config.task_statement(config.load("experiments/luna-xhigh-svgbob-v2.json"))
+        self.assertNotIn("reference `./executable`", moved)
+        self.assertNotIn("decompile `./executable`", moved)
+        self.assertEqual(moved.count("`/reference/executable`"), 9)
+        self.assertEqual(moved.count("`./executable`"), 1)  # the build target
+        self.assertIn("produces an executable `./executable` in the workspace root", moved)
+        self.assertIn("(`cp /reference/executable ./executable`)", moved)
+
     def test_digest_covers_code_but_not_tests_or_results(self):
         names = {str(p.relative_to(config.ROOT)) for p in config.code_files()}
         self.assertTrue({"bench/attempt.py", "bench/evaluate.py", "requirements.lock", "agent/Dockerfile"} <= names)

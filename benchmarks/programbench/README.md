@@ -49,6 +49,31 @@ A supported H1 shows that check-and-repair beats stopping after one build. It do
 show that the checker's *independence* is what helps (the loop also spends more compute); that is
 H2, a later experiment with a compute-matched self-review arm.
 
+### Pilot result and the adjusted follow-up
+
+`luna-xhigh-svgbob-v1` (standard ProgramBench conditions): **H1 not supported.** All 5 loop runs
+were eligible; per-run gains were 0, −14.8, −15.5, +4.4 and +4.7 points (median 0). The loop helped
+in the two runs whose builder kept the reference, and hurt where the builder had overwritten
+`./executable` (the task's build target is the reference's own path). Without the reference,
+checkers judged against the README, which contradicts the reference: it documents an Arial
+default font where the program renders `Iosevka Fixed, monospace`, an `--inline` flag it lacks,
+and a server mode that belongs to a separate program. Builders complied and lost about 70 tests
+each time. This split is exploratory (2 runs against 3).
+
+`luna-xhigh-svgbob-v2` keeps everything else identical and makes two declared adjustments to the
+environment (`task.reference_path`, `task.doc_fixes` in the experiment file; applied by
+`agent/prepare-task.py` when the image is built and recorded in the manifest):
+- the reference moves to `/reference/executable`, a root-owned directory the agent can run it
+  from but cannot overwrite, move or delete; the task statement points there, and the build
+  target stays `./executable`;
+- the three README statements that contradict the reference are corrected in place and folded
+  into the workspace's initial commit. The reference's own `--help` text is unchanged (it also
+  claims an Arial default), and the ambiguous `--scale` line is left as is.
+
+Both adjustments deviate from standard ProgramBench conditions, so v2 answers a different question
+(does the loop help when every node keeps the oracle and accurate documentation?) and is reported
+next to v1, not instead of it.
+
 ## The graph and prompts
 
 Both arms share one byte-identical `build` node; round 1 of the loop is exactly the single arm.
@@ -251,5 +276,7 @@ results/<experiment id>/
 - **Single-arm prompt:** the shared builder prompt mentions review feedback, which the single arm
   never receives.
 - **Scope:** one task. Generality needs a follow-up panel of tasks drawn at random.
+- **v2 environment:** the reference executable lives outside the workspace and three README
+  statements are corrected (see above); v1 uses the unmodified task.
 - **Served model:** OpenAI serves `gpt-5.6-luna` by name; transcripts do not identify a model
   snapshot, so a reproduction assumes the same served model.

@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from . import graphs, ledger
-from .config import AttemptSpec, Experiment, prompt
+from .config import AttemptSpec, Experiment, prompt, task_statement
 from .images import Network
 from .util import (
     SECRET_ENV,
@@ -120,7 +120,7 @@ def run_files(exp: Experiment, arm: str) -> dict[str, Any]:
     return {
         "graph.json": graph,
         "runtime.json": graphs.runtime_plan(arm, exp.model, exp.effort),
-        "input.json": {"task": prompt("task")},
+        "input.json": {"task": task_statement(exp)},
     }
 
 
@@ -242,7 +242,8 @@ class Attempt:
         origin = docker("exec", *HARNESS_PATH, self.name, "git", "-C", "/workspace", "remote", "get-url", "origin").strip()
         if origin != PLACEHOLDER_ORIGIN:
             raise RuntimeError(f"unexpected workspace origin {origin!r}")
-        size_and_hash = docker("exec", "-u", "root", *HARNESS_PATH, self.name, "sh", "-c", "stat -c %s /workspace/executable && sha256sum /workspace/executable | cut -d' ' -f1").split()
+        reference = shlex.quote(self.exp.reference_path)
+        size_and_hash = docker("exec", "-u", "root", *HARNESS_PATH, self.name, "sh", "-c", f"stat -c %s {reference} && sha256sum {reference} | cut -d' ' -f1").split()
         if len(size_and_hash) != 2:
             raise RuntimeError("reference executable missing at start")
         self.meta["reference_size"], self.meta["reference_sha256"] = int(size_and_hash[0]), size_and_hash[1]

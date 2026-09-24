@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import subprocess
 import sys
 import tarfile
@@ -27,7 +28,7 @@ from .attempt import (
     archive,
     run_files,
 )
-from .config import Experiment, pins
+from .config import UPSTREAM_REFERENCE, Experiment, pins
 from .evaluate import eval_image_tag, leaderboard_ignores, score_eval
 from .images import Network
 from .util import SECRET_ENV, docker, download, log, run, write_json
@@ -106,8 +107,24 @@ class Smoke:
         c, network = self._probe("probe")
         try:
             self.check("runs_as_agent", lambda: (self._sh(c, "id -un")[1] == "agent", self._sh(c, "id")[1]))
-            self.check("reference_binary_unreadable", lambda: (self._sh(c, "test -r /workspace/executable")[0] != 0, "execute-only for the agent"))
-            self.check("reference_binary_runs", lambda: (self._sh(c, "./executable --version")[0] == 0, self._sh(c, "./executable --version")[1]))
+            ref = shlex.quote(self.exp.reference_path)
+            self.check("reference_binary_unreadable", lambda: (self._sh(c, f"test -r {ref}")[0] != 0, "execute-only for the agent"))
+            self.check("reference_binary_runs", lambda: (self._sh(c, f"{ref} --version")[0] == 0, self._sh(c, f"{ref} --version")[1]))
+            if self.exp.reference_path != UPSTREAM_REFERENCE:
+                def reference_protected() -> tuple[bool, str]:
+                    """Moved out of the workspace, the reference survives whatever the agent does."""
+                    self._sh(c, f"rm -f {ref}; mv {ref} /tmp/zsbench-moved; printf x > {ref}; cp /bin/true {ref}; true")
+                    still = self._sh(c, f"{ref} --version")
+                    return still[0] == 0 and self._sh(c, "test -e /tmp/zsbench-moved")[0] != 0, f"after rm/mv/overwrite attempts: {still[1][:80]}"
+
+                self.check("reference_protected", reference_protected)
+                self.check("workspace_starts_clean", lambda: (not self._sh(c, "git -C /workspace status --porcelain")[1], self._sh(c, "git -C /workspace status --porcelain; git -C /workspace log --oneline")[1]))
+            for fix in self.exp.doc_fixes:
+                def doc_fix(fix: dict[str, str] = fix) -> tuple[bool, str]:
+                    text = self._sh(c, f"cat {shlex.quote('/workspace/' + fix['file'])}")[1]
+                    return fix["new"] in text and fix["old"] not in text, f"{fix['file']}: {fix['new'][:60]!r}"
+
+                self.check(f"doc_fix_applied_{self.exp.doc_fixes.index(fix) + 1}", doc_fix)
             self.check("harness_binaries_unreadable", lambda: (
                 self._sh(c, "test -r /usr/local/bin/zeroshot || test -r /opt/codex/bin/codex || test -r /opt/codex/bin/codex-code-mode-host")[0] != 0,
                 "zeroshot and Codex executables are execute-only (their /proc entries are protected)"))

@@ -13,6 +13,23 @@ from . import ROOT
 
 ARMS = ("loop", "single")
 EFFORTS = ("low", "medium", "high", "xhigh", "max")
+# Where ProgramBench task images put the reference executable. An experiment may move it out of the
+# workspace (task.reference_path), where the agent can run it but not overwrite, move or delete it.
+UPSTREAM_REFERENCE = "/workspace/executable"
+# The task statement's mentions of the reference, rewritten when it moves. The build target
+# (`compile.sh` producing `./executable` in the workspace root) is not one of them.
+REFERENCE_MENTIONS = (
+    ("The reference `./executable` is for", "The reference `{ref}` is for"),
+    ("(`cp ./executable ./executable`)", "(`cp {ref} ./executable`)"),
+    ("All information about the reference `./executable` must", "All information about the reference `{ref}` must"),
+    ("You MUST NOT decompile `./executable` or use disassemblers", "You MUST NOT decompile `{ref}` or use disassemblers"),
+    ("tracing/instrumentation tools on `./executable`", "tracing/instrumentation tools on `{ref}`"),
+    ("applies ONLY to the reference `./executable`.", "applies ONLY to the reference `{ref}`."),
+    ("The executable is located at `./executable` in the workspace root.", "The executable is located at `{ref}`."),
+    ("delegate to the reference `./executable`", "delegate to the reference `{ref}`"),
+    ("Do NOT decompile the reference `./executable`", "Do NOT decompile the reference `{ref}`"),
+    ("you MUST NOT decompile `./executable` or perform", "you MUST NOT decompile `{ref}` or perform"),
+)
 
 
 @dataclass(frozen=True)
@@ -41,6 +58,15 @@ class Experiment:
     @property
     def task_image(self) -> str:
         return self.raw["task"]["image"]
+
+    @property
+    def reference_path(self) -> str:
+        return self.raw["task"].get("reference_path", UPSTREAM_REFERENCE)
+
+    @property
+    def doc_fixes(self) -> list[dict[str, str]]:
+        """Exact-text corrections to the task's bundled documentation (``file``, ``old``, ``new``)."""
+        return self.raw["task"].get("doc_fixes", [])
 
     @property
     def model(self) -> str:
@@ -111,6 +137,12 @@ def _validate(raw: dict[str, Any]) -> None:
         raise ValueError("experiment id must be lowercase letters, digits, dots and dashes")
     if "@sha256:" not in raw["task"]["image"]:
         raise ValueError("task image must be pinned by digest")
+    reference = raw["task"].get("reference_path", UPSTREAM_REFERENCE)
+    if not reference.startswith("/") or (reference != UPSTREAM_REFERENCE and (reference + "/").startswith("/workspace/")):
+        raise ValueError("task.reference_path must be absolute and, when moved, outside /workspace")
+    for fix in raw["task"].get("doc_fixes", []):
+        if set(fix) != {"file", "old", "new"} or fix["file"].startswith("/") or ".." in Path(fix["file"]).parts or not fix["old"] or fix["old"] == fix["new"]:
+            raise ValueError(f"invalid doc fix: {fix}")
     if raw["model"]["effort"] not in EFFORTS:
         raise ValueError(f"effort must be one of {EFFORTS}")
     arms = raw["arms"]
@@ -140,3 +172,15 @@ def pins() -> dict[str, Any]:
 
 def prompt(name: str) -> str:
     return (ROOT / "prompts" / f"{name}.md").read_text().strip()
+
+
+def task_statement(exp: Experiment) -> str:
+    """The task statement, pointing at the reference wherever the experiment puts it."""
+    text = prompt("task")
+    if exp.reference_path == UPSTREAM_REFERENCE:
+        return text
+    for old, new in REFERENCE_MENTIONS:
+        if text.count(old) != 1:
+            raise ValueError(f"task statement does not contain {old!r} exactly once")
+        text = text.replace(old, new.format(ref=exp.reference_path))
+    return text
