@@ -43,7 +43,7 @@ TAR_OK = (0, 1)  # GNU tar: 1 = some files differ/changed while reading; the arc
 # Content fingerprint of the harness files a later node would execute with the API key in its
 # environment, and of Codex's system configuration layers (/etc/codex, absent in the image). The
 # image's sudo rules allow root through package-manager hooks, so the harness is fingerprinted at
-# start and end and any change is reported.
+# the start, after every node and at the end, and any change is reported.
 HARNESS_FINGERPRINT = (
     "cd / && find usr/local/bin/zeroshot usr/local/bin/codex opt/codex etc/codex \\( -type f -o -type l \\) 2>/dev/null | LC_ALL=C sort | "
     "while read -r f; do if [ -L \"$f\" ]; then echo \"link $f $(readlink \"$f\")\"; "
@@ -317,11 +317,13 @@ class Attempt:
             warnings = docker_to_file(["exec", "-u", "agent", self.name, *WORKSPACE_TAR], self.dir / "snapshots" / f"{label}.tar.gz", timeout=1800, ok_codes=TAR_OK)
             if warnings.strip():
                 self.meta["snapshot_warnings"][label] = warnings
-            record["reference_at"] = self._reference_locations()
-            record["codex_home_surfaces"] = self._codex_home_surfaces()
-            record["harness_fingerprint"] = self._harness_fingerprint()
         except Exception as error:  # a snapshot must never cost the run
             record["error"] = f"{type(error).__name__}: {error}"
+        for key, probe in (("reference_at", self._reference_locations), ("codex_home_surfaces", self._codex_home_surfaces), ("harness_fingerprint", self._harness_fingerprint)):
+            try:
+                record[key] = probe()
+            except Exception as error:  # recorded; the archive itself is still valid
+                record.setdefault("probe_errors", {})[key] = f"{type(error).__name__}: {error}"
         record["seconds"] = round(time.time() - started, 2)
         self.meta["snapshots"][label] = record
         self._save()
