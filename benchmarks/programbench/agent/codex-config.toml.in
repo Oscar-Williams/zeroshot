@@ -1,0 +1,27 @@
+# Codex configuration used by every agent node (rendered per task image by bench/images.py).
+# Isolation is enforced outside Codex: the container can only reach api.openai.com through the
+# allowlist proxy, so Codex runs with full access inside the disposable container.
+approval_policy = "never"
+sandbox_mode = "danger-full-access"
+# Hosted web search runs on OpenAI's side and would bypass the network allowlist.
+web_search = "disabled"
+check_for_update_on_startup = false
+
+[analytics]
+enabled = false
+
+[feedback]
+enabled = false
+
+[history]
+persistence = "none"
+
+# Zeroshot starts Codex with a minimal environment. Tool commands must still see the task
+# image's toolchain variables (CARGO_HOME, RUSTUP_HOME, ...) exactly as a plain shell in the
+# image would, plus the non-interactive pager settings the upstream baseline used. Variables
+# whose names contain KEY, SECRET or TOKEN stay excluded by Codex's default filter.
+[shell_environment_policy]
+inherit = "all"
+
+[shell_environment_policy.set]
+@SET@

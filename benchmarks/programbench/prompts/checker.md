@@ -1,0 +1,1 @@
+Independently judge whether the current workspace satisfies the task. Derive your own checks from the task statement and whatever it makes available; do not rely on the builder's tests, notes, or claims. Run the checks. Accept only with concrete evidence that nothing is wrong. Otherwise reject and list the most important discrepancies, each with a minimal reproduction.

@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# Build the runner image and run one bench command against this host's Docker daemon.
+#
+#   scripts/zsbench smoke
+#   scripts/zsbench run experiments/luna-xhigh-svgbob.json
+#
+# The API key comes from $OPENAI_API_KEY if set, otherwise from
+# ~/.config/zeroshot-bench/openai.env (see push-openai-key.sh). Results land in ./results unless
+# ZSBENCH_RESULTS_DIR is set. ZSBENCH_DETACH=1 runs the runner as a detached container named
+# zsbench-runner (follow it with `docker logs -f zsbench-runner`).
+set -euo pipefail
+
+here=$(cd "$(dirname "$0")/.." && pwd)
+image=${ZSBENCH_IMAGE:-zeroshot-programbench:local}
+results=${ZSBENCH_RESULTS_DIR:-$PWD/results}
+secret=${ZSBENCH_SECRET_FILE:-$HOME/.config/zeroshot-bench/openai.env}
+mkdir -p "$results"
+
+ref=$(git -C "$here" rev-parse HEAD 2>/dev/null || echo unknown)
+docker build --quiet --build-arg "VCS_REF=$ref" -t "$image" "$here" >/dev/null
+
+args=(
+  -v /var/run/docker.sock:/var/run/docker.sock
+  -v "$results:/results"
+  -v zsbench-cache:/cache
+  -v zsbench-hf:/root/.cache/huggingface
+)
+if [[ -n ${OPENAI_API_KEY:-} ]]; then
+  args+=(-e OPENAI_API_KEY)
+elif [[ -f $secret ]]; then
+  args+=(-v "$secret:/run/secrets/openai.env:ro")
+fi
+
+if [[ ${ZSBENCH_DETACH:-0} == 1 ]]; then
+  docker rm -f zsbench-runner >/dev/null 2>&1 || true
+  exec docker run -d --name zsbench-runner --label zsbench=1 "${args[@]}" "$image" "$@"
+fi
+tty=()
+[[ -t 0 ]] && tty=(-it)
+exec docker run --rm "${tty[@]}" "${args[@]}" "$image" "$@"
