@@ -86,6 +86,14 @@ so 50 rounds fit the 6-hour cap). Every snapshot is archived, but a pre-register
 (`eval.rounds`) scores only builds 1, 2, 3, 5, 10, 20, 30, 40 and 50 plus the final workspace; the
 summary adds a learning-curve table. The H1 rule is unchanged (final against build 1).
 
+v3 result: **H1 supported.** All 5 loop runs were eligible and all gained (+2.5, +14.0, +10.4, +7.2
+and +16.1 points; at least 12 tests each, median 10.4). No checker ever accepted, so every loop ran
+all 50 rounds (2.75 to 4.7 hours). The mean gain over build 1 was +3.7 points after 5 rounds, +4.8
+after 10, +6.4 after 20, +8.9 after 30 and +10.0 after 50 (95% percentile bootstrap interval over
+runs 5.8 to 14.1): most of it came by round 30, and three runs changed little over their last 10 to
+30 rounds. The best run reached 60.0%. The single-worker finals scored 38.6, 41.7 and 44.3%. The
+loops cost $6.73 to $9.42 each (about $0.15 per round) and the single runs $0.20 to $0.35.
+
 ## The graph and prompts
 
 Both arms share one byte-identical `build` node; round 1 of the loop is exactly the single arm.
