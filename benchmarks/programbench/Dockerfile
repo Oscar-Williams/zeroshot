@@ -1,4 +1,3 @@
-# syntax=docker/dockerfile:1
 # The benchmark runner. It drives the host's Docker daemon (mount /var/run/docker.sock) to build
 # the agent and proxy images, run isolated attempts, and evaluate them with ProgramBench.
 FROM python:3.12-slim-bookworm@sha256:392307d22300de8b5986851a12d9176dfc0fc073e65bf6523ebd7dcbeb23564e

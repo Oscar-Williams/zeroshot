@@ -70,13 +70,22 @@ class Experiment:
         return [AttemptSpec(index + 1, arm) for index, arm in enumerate(self.raw["order"])]
 
     def digest(self) -> str:
-        """Hash of everything that defines the experiment's behavior."""
+        """Hash of the experiment config and every file of the benchmark that shapes a run."""
         h = hashlib.sha256()
         h.update(json.dumps(self.raw, sort_keys=True).encode())
-        for name in ("prompts/builder.md", "prompts/checker.md", "prompts/task.md", "pins.json", "bench/graphs.py", "agent/Dockerfile", "agent/codex-config.toml.in", "proxy/Dockerfile", "proxy/tinyproxy.conf", "proxy/filter"):
-            h.update(name.encode())
-            h.update((ROOT / name).read_bytes())
+        for path in code_files():
+            h.update(str(path.relative_to(ROOT)).encode())
+            h.update(path.read_bytes())
         return h.hexdigest()
+
+
+def code_files() -> list[Path]:
+    """Files that shape a run: everything in the benchmark except results, tests and hidden files."""
+    skip = {"results", "tests", "__pycache__"}
+    return sorted(
+        p for p in ROOT.rglob("*")
+        if p.is_file() and not skip & set(p.relative_to(ROOT).parts) and not any(part.startswith(".") for part in p.relative_to(ROOT).parts) and p.suffix != ".pyc"
+    )
 
 
 def load(path: str | Path) -> Experiment:

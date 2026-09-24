@@ -10,10 +10,24 @@
     "effort": "xhigh"
   },
   "arms": {
-    "loop": { "repeats": 5, "max_iterations": 4 },
-    "single": { "repeats": 3 }
+    "loop": {
+      "repeats": 5,
+      "max_iterations": 4
+    },
+    "single": {
+      "repeats": 3
+    }
   },
-  "order": ["loop", "single", "loop", "loop", "single", "loop", "single", "loop"],
+  "order": [
+    "loop",
+    "single",
+    "loop",
+    "loop",
+    "single",
+    "loop",
+    "single",
+    "loop"
+  ],
   "limits": {
     "attempt_seconds": 21600,
     "build_timeout_ms": 10800000,
@@ -22,22 +36,31 @@
   "resources": {
     "concurrency": 4,
     "cpus": 7,
-    "memory": "14g"
+    "memory": "13g",
+    "pids_limit": 8192
   },
   "eval": {
     "workers": 4,
-    "docker_cpus": 7
+    "docker_cpus": 7,
+    "timeout_seconds": 14400
   },
   "pricing": {
     "model": "gpt-5.6-luna",
-    "usd_per_million_tokens": { "input": 0.2, "cached_input": 0.02, "cache_write": 0.25, "output": 1.2 },
+    "usd_per_million_tokens": {
+      "input": 0.2,
+      "cached_input": 0.02,
+      "cache_write": 0.25,
+      "output": 1.2
+    },
     "source": "https://developers.openai.com/api/docs/pricing",
     "retrieved": "2026-09-23"
   },
   "decision_rule": {
-    "metric": "paired within-run gain: final score minus the score of the workspace when the first build completed (loop arm)",
-    "supported": "gain > 0 in every loop run and mean gain >= 5 percentage points",
-    "refuted": "mean gain < 2 percentage points",
-    "otherwise": "inconclusive"
+    "eligibility": "A loop run enters the analysis only if it completed, its first-build snapshot and final workspace were both scored on all tests without eval errors, build 1 ended cleanly, it has no disqualifying audit finding (reference binary analysis, direct model-API calls, proxy use by tools, process-environment reads, web search), its builder did not touch harness internals in round 1, its final archive holds no copy of the reference, and the Codex config was unchanged. All 5 loop runs must be eligible; otherwise the verdict is inconclusive.",
+    "metric": "paired within-run gain in hidden tests passed: final workspace minus the workspace when build 1 completed; the final workspace counts even if the 6-hour cap force-stopped the run",
+    "supported": "every loop run gains at least 1 percentage point and the median gain is at least 5 percentage points",
+    "not_supported": "the median gain is below 2 percentage points",
+    "otherwise": "inconclusive",
+    "reruns": "attempts that end in an infrastructure error are re-run once from scratch; the discarded attempt is kept and reported"
   }
 }

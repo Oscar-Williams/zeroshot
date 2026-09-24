@@ -92,12 +92,17 @@ def build_agent(exp: Experiment, cache: Path) -> tuple[str, dict[str, str]]:
 
 
 class Network:
-    """An internal Docker network whose only exit is the allowlist proxy."""
+    """A private internal Docker network whose only exit is its own allowlist proxy.
 
-    def __init__(self, exp: Experiment, proxy_image: str):
-        self.name = f"zsbench-{exp.id}"
-        self.proxy = f"zsbench-{exp.id}-proxy"
+    Every attempt gets one, so concurrent attempts cannot reach each other and each proxy log
+    belongs to exactly one attempt.
+    """
+
+    def __init__(self, name: str, proxy_image: str, labels: tuple[str, ...] = ()):
+        self.name = name
+        self.proxy = f"{name}-proxy"
         self.proxy_image = proxy_image
+        self.labels = [arg for label in ("zsbench=1", *labels) for arg in ("--label", label)]
 
     @property
     def proxy_url(self) -> str:
@@ -105,10 +110,9 @@ class Network:
 
     def up(self) -> None:
         self.down()
-        docker("network", "create", "--internal", "--label", "zsbench=1", self.name)
-        docker("run", "-d", "--name", self.proxy, "--label", "zsbench=1", "--restart", "unless-stopped", "--network", self.name, self.proxy_image)
+        docker("network", "create", "--internal", *self.labels, self.name)
+        docker("run", "-d", "--name", self.proxy, *self.labels, "--restart", "unless-stopped", "--network", self.name, self.proxy_image)
         docker("network", "connect", "bridge", self.proxy)
-        log(f"network {self.name} up; egress only through {self.proxy} (allowlist: api.openai.com:443)")
 
     def proxy_log(self) -> str:
         result = run(["docker", "logs", self.proxy], check=False)

@@ -5,36 +5,68 @@
 #   scripts/zsbench run experiments/luna-xhigh-svgbob.json
 #
 # The API key comes from $OPENAI_API_KEY if set, otherwise from
-# ~/.config/zeroshot-bench/openai.env (see push-openai-key.sh). Results land in ./results unless
+# ~/.config/zeroshot-bench/openai.env (see push-openai-key.sh). Either way it reaches the runner as
+# a read-only file mount, never as container config. Results land in ./results unless
 # ZSBENCH_RESULTS_DIR is set. ZSBENCH_DETACH=1 runs the runner as a detached container named
-# zsbench-runner (follow it with `docker logs -f zsbench-runner`).
+# zsbench-runner (follow it with `docker logs -f zsbench-runner`; stop it with
+# `docker stop -t 1800 zsbench-runner` so running attempts are wound down and recorded).
 set -euo pipefail
 
 here=$(cd "$(dirname "$0")/.." && pwd)
 image=${ZSBENCH_IMAGE:-zeroshot-programbench:local}
 results=${ZSBENCH_RESULTS_DIR:-$PWD/results}
 secret=${ZSBENCH_SECRET_FILE:-$HOME/.config/zeroshot-bench/openai.env}
+socket=${ZSBENCH_DOCKER_SOCK:-/var/run/docker.sock}
 mkdir -p "$results"
 
-ref=$(git -C "$here" rev-parse HEAD 2>/dev/null || echo unknown)
+# Provenance: the exact commit, and whether the benchmark tree differs from it.
+if ref=$(git -C "$here" rev-parse HEAD 2>/dev/null); then
+  if [[ -n $(git -C "$here" status --porcelain -- . | grep -v ' results/' || true) ]]; then dirty=true; else dirty=false; fi
+else
+  ref=unknown dirty=unknown
+fi
+if [[ ${1:-} == run && $dirty != false && ${ZSBENCH_ALLOW_DIRTY:-0} != 1 ]]; then
+  echo "Refusing a paid run from a tree that is not a clean git checkout (commit $ref, dirty=$dirty)." >&2
+  echo "Commit or stash your changes, or set ZSBENCH_ALLOW_DIRTY=1 to override." >&2
+  exit 1
+fi
+
 docker build --quiet --build-arg "VCS_REF=$ref" -t "$image" "$here" >/dev/null
 
 args=(
-  -v /var/run/docker.sock:/var/run/docker.sock
+  -v "$socket:/var/run/docker.sock"
   -v "$results:/results"
   -v zsbench-cache:/cache
   -v zsbench-hf:/root/.cache/huggingface
+  -e "ZSBENCH_VCS_REF=$ref" -e "ZSBENCH_VCS_DIRTY=$dirty"
+  -e "ZSBENCH_HOST_UID=$(id -u)" -e "ZSBENCH_HOST_GID=$(id -g)"
 )
+
+temp_secret=""
+cleanup() { [[ -n $temp_secret ]] && rm -f "$temp_secret"; }
+trap cleanup EXIT
 if [[ -n ${OPENAI_API_KEY:-} ]]; then
-  args+=(-e OPENAI_API_KEY)
+  echo "zsbench: using OPENAI_API_KEY from the environment" >&2
+  temp_secret=$(umask 077 && mktemp "${XDG_RUNTIME_DIR:-/tmp}/zsbench-key.XXXXXX")
+  printf 'OPENAI_API_KEY=%s\n' "$OPENAI_API_KEY" > "$temp_secret"
+  args+=(-v "$temp_secret:/run/secrets/openai.env:ro")
 elif [[ -f $secret ]]; then
+  echo "zsbench: using key file $secret" >&2
   args+=(-v "$secret:/run/secrets/openai.env:ro")
 fi
 
 if [[ ${ZSBENCH_DETACH:-0} == 1 ]]; then
-  docker rm -f zsbench-runner >/dev/null 2>&1 || true
-  exec docker run -d --name zsbench-runner --label zsbench=1 "${args[@]}" "$image" "$@"
+  if [[ $(docker inspect -f '{{.State.Running}}' zsbench-runner 2>/dev/null || true) == true ]]; then
+    echo "A zsbench-runner container is already running; stop it first (docker stop -t 1800 zsbench-runner)." >&2
+    exit 1
+  fi
+  docker rm zsbench-runner >/dev/null 2>&1 || true
+  docker run -d --name zsbench-runner --label zsbench=1 --stop-timeout 1800 "${args[@]}" "$image" "$@"
+  if [[ -n $temp_secret ]]; then
+    sleep 20  # the runner reads the key at startup; the temporary file is then removed
+  fi
+  exit 0
 fi
 tty=()
 [[ -t 0 ]] && tty=(-it)
-exec docker run --rm "${tty[@]}" "${args[@]}" "$image" "$@"
+docker run --rm "${tty[@]}" "${args[@]}" "$image" "$@"

@@ -1,33 +1,87 @@
-"""Summaries: per-attempt table, per-arm aggregates, and the pre-registered decision rule."""
+"""Summaries: per-attempt table, per-arm aggregates, and the pre-registered H1 decision."""
 
 from __future__ import annotations
 
+import math
 import statistics
+import tarfile
+from collections import Counter
 from pathlib import Path
 from typing import Any
 
 from . import accounting, audit
 from .config import Experiment
 from .evaluate import load_scores
-from .util import read_json, write_json
+from .util import read_json, secret_values, write_json
+
+REQUIRED_LOOP_RUNS = 5
 
 
 def _pct(value: float | None) -> str:
     return "—" if value is None else f"{100 * value:.1f}%"
 
 
-def build(exp: Experiment, results: Path, proxy_log: str | None = None) -> dict[str, Any]:
+def _archived_codex_config(trajectories: Path) -> str | None:
+    if not trajectories.exists():
+        return None
+    with tarfile.open(trajectories) as tar:
+        for member in tar:
+            if member.name.endswith(".codex/config.toml") and member.isfile():
+                data = tar.extractfile(member)
+                return data.read().decode() if data else None
+    return None
+
+
+def _eligibility(record: dict[str, Any], expected_tests: int | None) -> list[str]:
+    """Reasons a loop run cannot enter the H1 analysis (empty = eligible)."""
+    reasons = []
+    if record["state"] != "complete":
+        reasons.append(f"state {record['state']}")
+    final, first = record["rounds"].get("final") or {}, record["rounds"].get("build-1") or {}
+    for name, score in (("final", final), ("build-1", first)):
+        if score.get("score") is None:
+            reasons.append(f"{name} not scored")
+        elif expected_tests and score.get("scored_tests") != expected_tests:
+            reasons.append(f"{name} scored {score.get('scored_tests')} of {expected_tests} tests")
+        if score.get("error_code") or score.get("test_branch_errors"):
+            reasons.append(f"{name} eval error {score.get('error_code') or score.get('test_branch_errors')}")
+    first_build = (record.get("build_outcomes") or [None])[0]
+    if first_build != "verified":
+        reasons.append(f"build 1 ended {first_build}")
+    if "error" in ((record.get("snapshots") or {}).get("build-1") or {}):
+        reasons.append("build-1 snapshot failed")
+    commands = record["commands"]
+    for rule in audit.DISQUALIFYING:
+        if (commands.get("rule_counts") or {}).get(rule):
+            reasons.append(f"audit: {rule}")
+    if commands.get("web_search_calls"):
+        reasons.append("audit: web search")
+    if ((commands.get("rule_counts_by_turn") or {}).get("build.turn1") or {}).get("harness_internals"):
+        reasons.append("audit: builder read harness internals in round 1")
+    if record.get("reference_copies_in_final"):
+        reasons.append("final archive contains the reference binary")
+    if record.get("codex_config_unchanged") is False:
+        reasons.append("Codex config was modified during the run")
+    return reasons
+
+
+def build(exp: Experiment, results: Path) -> dict[str, Any]:
     scores = load_scores(results)
+    manifest = read_json(results / "manifest.json") if (results / "manifest.json").exists() else {}
+    counts = Counter(v.get("scored_tests") for v in scores.values() if v.get("scored_tests"))
+    expected_tests = counts.most_common(1)[0][0] if counts else None
     attempts = []
     for directory in sorted((results / "attempts").glob("*")):
-        if not directory.is_dir() or ".incomplete-" in directory.name or not (directory / "attempt.json").exists():
+        if not directory.is_dir() or "." in directory.name or not (directory / "attempt.json").exists():
             continue
         meta = read_json(directory / "attempt.json")
         label = meta["label"]
-        tokens = accounting.usage(directory)
-        rounds = {k.split("__", 1)[1]: v.get("score") for k, v in scores.items() if k.startswith(f"{label}__")}
-        final = rounds.get("final")
-        first = rounds.get("build-1")
+        rounds = {k.split("__", 1)[1]: v for k, v in scores.items() if k.startswith(f"{label}__")}
+        usage = accounting.usage(directory)
+        costs = {node: round(accounting.cost(t, exp.pricing), 4) for node, t in usage["nodes"].items()}
+        first_turn_cost = round(accounting.cost(usage["first_build_turn"], exp.pricing), 4)
+        snapshot_order = sorted((meta.get("snapshots") or {}), key=lambda k: (meta["snapshots"][k].get("started_at") or 0))
+        archived_config = _archived_codex_config(directory / "trajectories.tar.gz")
         record = {
             "label": label,
             "arm": meta["arm"],
@@ -40,18 +94,53 @@ def build(exp: Experiment, results: Path, proxy_log: str | None = None) -> dict[
             "build_outcomes": [b.get("code") or b.get("status") for b in meta.get("build_outcomes", [])],
             "verdicts": [v.get("verdict") or f"{v.get('status')}:{v.get('code')}" for v in meta.get("verdicts", [])],
             "wall_seconds": meta.get("wall_seconds"),
-            "score_final": final,
-            "score_first_build": first,
-            "gain_over_first_build": None if final is None or first is None else final - first,
-            "scores_by_round": rounds,
-            "eval_error": (scores.get(f"{label}__final") or {}).get("error_code"),
-            "tokens": tokens,
-            "cost_usd": {node: round(accounting.cost(t, exp.pricing), 4) for node, t in tokens.items()},
+            "rounds": rounds,
+            "score_final": (rounds.get("final") or {}).get("score"),
+            "score_first_build": (rounds.get("build-1") or {}).get("score"),
+            "snapshots": meta.get("snapshots"),
+            "tokens": usage,
+            "cost_usd": costs,
+            "cost_first_build_turn_usd": first_turn_cost,
             "commands": audit.command_audit(directory / "trajectories.tar.gz"),
-            "checker_edits": audit.checker_edits(directory, (meta.get("snapshots") or {}).get("check", 0)),
-            "reference_at_snapshot": meta.get("reference_at_snapshot"),
+            "checker_edits": audit.checker_edits(directory, snapshot_order),
+            "reference_copies_in_final": audit.reference_copies(directory / "submission.tar.gz", meta.get("reference_sha256")),
+            "codex_config_unchanged": None if archived_config is None or not manifest.get("codex_config") else archived_config == manifest["codex_config"],
         }
+        final, first = rounds.get("final") or {}, rounds.get("build-1") or {}
+        if final.get("passed") is not None and first.get("passed") is not None:
+            record["gain_tests"] = final["passed"] - first["passed"]
+        record["ineligible_reasons"] = _eligibility(record, expected_tests) if record["arm"] == "loop" else []
         attempts.append(record)
+    summary = {
+        "experiment": exp.id,
+        "description": exp.raw.get("description"),
+        "model": exp.model,
+        "effort": exp.effort,
+        "expected_scored_tests": expected_tests,
+        "attempts": attempts,
+        "arms": _arms(attempts),
+        "h1_decision": _decision(attempts, expected_tests, exp),
+        "baseline_check": _baseline_check(attempts),
+        "secrets": _secrets(results),
+        "egress": audit.proxy_audit("\n".join((d / "proxy.log").read_text() for d in sorted((results / "attempts").glob("*")) if (d / "proxy.log").exists())),
+        "provenance": manifest.get("provenance"),
+    }
+    write_json(results / "summary.json", summary)
+    (results / "summary.md").write_text(markdown(summary))
+    return summary
+
+
+def _secrets(results: Path) -> dict[str, Any]:
+    """Scan with the key when it is available; otherwise keep the last scan that had it."""
+    previous = results / "summary.json"
+    if not secret_values() and previous.exists():
+        last = (read_json(previous).get("secrets") or {})
+        if last.get("checked_literal_key"):
+            return {**last, "note": "carried over from the last scan made with the key"}
+    return audit.secret_scan(results)
+
+
+def _arms(attempts: list[dict[str, Any]]) -> dict[str, Any]:
     arms = {}
     for arm in sorted({a["arm"] for a in attempts}):
         group = [a for a in attempts if a["arm"] == arm]
@@ -59,38 +148,67 @@ def build(exp: Experiment, results: Path, proxy_log: str | None = None) -> dict[
         costs = [a["cost_usd"].get("total", 0.0) for a in group]
         arms[arm] = {
             "runs": len(group),
+            "complete": sum(1 for a in group if a["state"] == "complete"),
             "scored": len(finals),
             "final_scores": finals,
             "median_final": statistics.median(finals) if finals else None,
             "mean_final": statistics.fmean(finals) if finals else None,
             "collapses_below_5pct": sum(1 for s in finals if s < 0.05),
             "mean_cost_usd": statistics.fmean(costs) if costs else None,
-            "total_cost_usd": sum(costs),
+            "total_cost_usd": round(sum(costs), 4),
         }
-    gains = [a["gain_over_first_build"] for a in attempts if a["arm"] == "loop" and a["gain_over_first_build"] is not None]
-    decision = None
-    if gains:
-        mean_gain = statistics.fmean(gains)
-        verdict = "supported" if all(g > 0 for g in gains) and mean_gain >= 0.05 else "refuted" if mean_gain < 0.02 else "inconclusive"
-        decision = {"paired_gains": gains, "mean_gain": mean_gain, "all_positive": all(g > 0 for g in gains), "verdict": verdict, "rule": exp.raw.get("decision_rule")}
-    summary = {
-        "experiment": exp.id,
-        "description": exp.raw.get("description"),
-        "model": exp.model,
-        "effort": exp.effort,
-        "attempts": attempts,
-        "arms": arms,
-        "h1_decision": decision,
-        "secrets": audit.secret_scan(results),
-        "egress": audit.proxy_audit(proxy_log) if proxy_log is not None else None,
+    return arms
+
+
+def _decision(attempts: list[dict[str, Any]], expected_tests: int | None, exp: Experiment) -> dict[str, Any] | None:
+    """Pre-registered H1 rule, in whole tests (N = scored tests per run)."""
+    loops = [a for a in attempts if a["arm"] == "loop"]
+    if not loops:
+        return None
+    eligible = [a for a in loops if not a["ineligible_reasons"]]
+    gains = [a["gain_tests"] for a in eligible]
+    result: dict[str, Any] = {
+        "rule": exp.raw.get("decision_rule"),
+        "eligible_runs": len(eligible),
+        "required_runs": REQUIRED_LOOP_RUNS,
+        "ineligible": {a["label"]: a["ineligible_reasons"] for a in loops if a["ineligible_reasons"]},
+        "gains_tests": gains,
+        "scored_tests": expected_tests,
     }
-    write_json(results / "summary.json", summary)
-    (results / "summary.md").write_text(markdown(summary))
-    return summary
+    if len(eligible) < REQUIRED_LOOP_RUNS or not expected_tests:
+        result["verdict"] = f"inconclusive (only {len(eligible)} of {REQUIRED_LOOP_RUNS} loop runs eligible)"
+        return result
+    n = expected_tests
+    median_gain = statistics.median(gains)
+    result.update({
+        "gains_pp": [round(100 * g / n, 2) for g in gains],
+        "median_gain_pp": round(100 * median_gain / n, 2),
+        "mean_gain_pp": round(100 * statistics.fmean(gains) / n, 2),
+        "sign_test_one_sided_p": round(0.5 ** len(gains), 4) if all(g > 0 for g in gains) else None,
+    })
+    if all(g >= math.ceil(0.01 * n) for g in gains) and median_gain * 100 >= 5 * n:
+        result["verdict"] = "supported"
+    elif median_gain * 100 < 2 * n:
+        result["verdict"] = "not supported"
+    else:
+        result["verdict"] = "inconclusive"
+    return result
+
+
+def _baseline_check(attempts: list[dict[str, Any]]) -> dict[str, Any]:
+    """The loop's first build should look like a single-arm run (same prompt, same node)."""
+    singles = [a["score_final"] for a in attempts if a["arm"] == "single" and a["score_final"] is not None]
+    first_builds = [a["score_first_build"] for a in attempts if a["arm"] == "loop" and a["score_first_build"] is not None]
+    return {
+        "single_final_mean": statistics.fmean(singles) if singles else None,
+        "loop_first_build_mean": statistics.fmean(first_builds) if first_builds else None,
+        "single_final_scores": singles,
+        "loop_first_build_scores": first_builds,
+    }
 
 
 def markdown(summary: dict[str, Any]) -> str:
-    lines = [f"# {summary['experiment']}", "", summary.get("description") or "", "", f"Model `{summary['model']}` at effort `{summary['effort']}`.", ""]
+    lines = [f"# {summary['experiment']}", "", summary.get("description") or "", "", f"Model `{summary['model']}` at effort `{summary['effort']}`; {summary.get('expected_scored_tests')} scored hidden tests per run.", ""]
     lines += ["| Run | Arm | State | Rounds | Verdicts | First build | Final | Gain | Wall (min) | Cost (USD) | Flags |", "|---|---|---|---|---|---|---|---|---|---|---|"]
     for a in summary["attempts"]:
         flags = [k for k, v in (a["commands"].get("rule_counts") or {}).items() if v]
@@ -98,22 +216,31 @@ def markdown(summary: dict[str, Any]) -> str:
             flags.append("web_search")
         if any(r["workspace_changes"] for r in a["checker_edits"]):
             flags.append("checker_edited_sources")
-        if any(state != "in_place" for state in (a.get("reference_at_snapshot") or {}).values()):
-            flags.append("reference_moved")
-        gain = a["gain_over_first_build"]
+        if a.get("force_stopped"):
+            flags.append(f"force-stopped ({a['force_stopped']})")
+        if a.get("ineligible_reasons"):
+            flags.append("H1-ineligible")
+        gain = a.get("gain_tests")
+        n = summary.get("expected_scored_tests") or 0
         lines.append(
             f"| {a['label']} | {a['arm']} | {a['state']} | {a['builds'] or 0} | {', '.join(v or '—' for v in a['verdicts']) or '—'} | "
-            f"{_pct(a['score_first_build'])} | {_pct(a['score_final'])} | {'—' if gain is None else f'{100 * gain:+.1f} pp'} | "
+            f"{_pct(a['score_first_build'])} | {_pct(a['score_final'])} | {'—' if gain is None or not n else f'{gain:+d} tests ({100 * gain / n:+.1f} pp)'} | "
             f"{(a['wall_seconds'] or 0) / 60:.0f} | {a['cost_usd'].get('total', 0):.2f} | {', '.join(flags) or '—'} |"
         )
-    lines += ["", "| Arm | Runs | Median final | Mean final | Collapses | Mean cost |", "|---|---|---|---|---|---|"]
+    lines += ["", "| Arm | Runs | Complete | Scored | Median final | Mean final | Collapses | Mean cost |", "|---|---|---|---|---|---|---|---|"]
     for arm, s in summary["arms"].items():
-        lines.append(f"| {arm} | {s['runs']} | {_pct(s['median_final'])} | {_pct(s['mean_final'])} | {s['collapses_below_5pct']} | ${(s['mean_cost_usd'] or 0):.2f} |")
+        lines.append(f"| {arm} | {s['runs']} | {s['complete']} | {s['scored']} | {_pct(s['median_final'])} | {_pct(s['mean_final'])} | {s['collapses_below_5pct']} | ${(s['mean_cost_usd'] or 0):.2f} |")
     d = summary.get("h1_decision")
     if d:
-        lines += ["", f"**H1 (pre-registered):** {d['verdict']}. Mean paired gain {100 * d['mean_gain']:+.1f} pp; all positive: {d['all_positive']}."]
+        lines += ["", f"**H1 (pre-registered): {d['verdict']}.** Eligible loop runs: {d['eligible_runs']}/{d['required_runs']}."]
+        if "median_gain_pp" in d:
+            lines.append(f"Per-run gains: {d['gains_pp']} pp; median {d['median_gain_pp']} pp; mean {d['mean_gain_pp']} pp; one-sided sign test p = {d['sign_test_one_sided_p']}.")
+        for label, reasons in d["ineligible"].items():
+            lines.append(f"- {label} ineligible: {'; '.join(reasons)}")
+    b = summary["baseline_check"]
+    lines += ["", f"Baseline check: single-arm finals mean {_pct(b['single_final_mean'])} vs loop first builds mean {_pct(b['loop_first_build_mean'])}."]
     s = summary["secrets"]
-    lines += ["", f"Secret scan: literal key checked={s['checked_literal_key']}, hits={len(s['literal_key_hits'])}."]
+    lines += ["", f"Secret scan: literal key checked={s['checked_literal_key']}, hits={len(s['literal_key_hits'])}{' — DO NOT PUBLISH' if s['literal_key_hits'] else ''}."]
     if summary.get("egress"):
         lines.append(f"Egress: connected {summary['egress']['established']}; refused {summary['egress']['refused']}.")
     return "\n".join(lines) + "\n"

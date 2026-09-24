@@ -14,8 +14,9 @@ import sys
 import threading
 import time
 import urllib.request
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 SECRET_ENV = "OPENAI_API_KEY"
 _log_lock = threading.Lock()
@@ -50,15 +51,18 @@ def docker(*args: str, check: bool = True, timeout: float | None = None, input: 
     return result.stdout.decode(errors="replace")
 
 
-def docker_to_file(args: list[str], path: Path, timeout: float | None = None) -> None:
+def docker_to_file(args: list[str], path: Path, timeout: float | None = None, ok_codes: tuple[int, ...] = (0,)) -> str:
+    """Stream a docker command's stdout into ``path``; return its stderr (warnings) on success."""
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".partial")
     with tmp.open("wb") as out:
         result = subprocess.run(["docker", *args], stdout=out, stderr=subprocess.PIPE, timeout=timeout)
-    if result.returncode != 0:
+    stderr = result.stderr.decode(errors="replace")
+    if result.returncode not in ok_codes:
         tmp.unlink(missing_ok=True)
-        raise RuntimeError(f"docker {' '.join(args[:4])} failed: {result.stderr.decode(errors='replace')[-2000:]}")
+        raise RuntimeError(f"docker {' '.join(args[:4])} exited {result.returncode}: {stderr[-2000:]}")
     tmp.replace(path)
+    return stderr[-2000:]
 
 
 def sha256_file(path: Path) -> str:

@@ -8,7 +8,7 @@ Commands:
   run         run every attempt, then evaluate and report
   eval        (re)evaluate and score existing attempts
   report      rebuild summary.json and summary.md
-  cleanup     remove this experiment's containers and network
+  cleanup     remove this experiment's containers and networks
 """
 
 from __future__ import annotations
@@ -16,7 +16,9 @@ from __future__ import annotations
 import argparse
 import os
 import platform
+import shutil
 import signal
+import socket
 import sys
 import time
 import urllib.error
@@ -26,11 +28,21 @@ from pathlib import Path
 
 from . import ROOT, config, evaluate, images, report, smoke
 from .attempt import Attempt, run_files
-from .util import SECRET_ENV, docker, load_secret_file, log, require_secret, set_log_file, write_json
+from .util import (
+    SECRET_ENV,
+    docker,
+    load_secret_file,
+    log,
+    read_json,
+    require_secret,
+    set_log_file,
+    write_json,
+)
 
 RESULTS = Path(os.environ.get("ZSBENCH_RESULTS", "/results"))
 CACHE = Path(os.environ.get("ZSBENCH_CACHE", "/cache"))
 SECRET_FILE = os.environ.get("ZSBENCH_SECRET_FILE", "/run/secrets/openai.env")
+GIB = 1 << 30
 
 
 def _results(exp: config.Experiment) -> Path:
@@ -38,6 +50,16 @@ def _results(exp: config.Experiment) -> Path:
     path.mkdir(parents=True, exist_ok=True)
     set_log_file(path / "run.log")
     return path
+
+
+def _provenance(exp: config.Experiment) -> dict:
+    runner_image = docker("inspect", "-f", "{{.Image}}", socket.gethostname(), check=False).strip() or "unknown"
+    return {
+        "vcs_ref": os.environ.get("ZSBENCH_VCS_REF", "unknown"),
+        "vcs_dirty": os.environ.get("ZSBENCH_VCS_DIRTY", "unknown"),
+        "runner_image": runner_image,
+        "experiment_digest": exp.digest(),
+    }
 
 
 def cmd_plan(exp: config.Experiment) -> None:
@@ -61,35 +83,68 @@ def cmd_check_key(exp: config.Experiment) -> None:
         sys.exit(f"FAILED: HTTP {error.code} for {exp.model} (401 = key rejected, 404 = model unavailable to this key)")
 
 
-def _manifest(exp: config.Experiment, results: Path, agent_info: dict, proxy_image: str) -> None:
-    write_json(results / "manifest.json", {
-        "experiment": exp.raw,
-        "experiment_digest": exp.digest(),
-        "pins": config.pins(),
-        "agent_image": agent_info["tag"],
-        "task_image": agent_info["task_image"],
-        "task_image_id": docker("image", "inspect", exp.task_image, "--format", "{{.Id}}").strip(),
-        "codex_config": agent_info["codex_config"],
-        "proxy_image": proxy_image,
-        "prompts": {name: config.prompt(name) for name in ("builder", "checker", "task")},
-        "runner": {"vcs_ref": os.environ.get("ZSBENCH_VCS_REF", "unknown"), "python": platform.python_version()},
-        "host": {"docker": docker("version", "--format", "{{.Server.Version}}").strip(), "cpus": docker("info", "--format", "{{.NCPU}}").strip(), "memory_bytes": docker("info", "--format", "{{.MemTotal}}").strip()},
-        "created_at": time.time(),
-    })
+def _memory_bytes(value: str) -> int:
+    units = {"k": 1 << 10, "m": 1 << 20, "g": GIB}
+    return int(float(value[:-1]) * units[value[-1].lower()]) if value[-1].lower() in units else int(value)
 
 
-def _prepare(exp: config.Experiment, results: Path) -> tuple[str, images.Network]:
+def _preflight(exp: config.Experiment, results: Path) -> None:
+    running = docker("ps", "-q", "--filter", f"label=zsbench.experiment={exp.id}").split()
+    if running:
+        sys.exit(f"{len(running)} container(s) of experiment {exp.id} are still running (another runner, or a crashed one). Run `cleanup` first.")
+    res = exp.resources
+    cpus = float(docker("info", "--format", "{{.NCPU}}").strip())
+    memory = int(docker("info", "--format", "{{.MemTotal}}").strip())
+    if cpus < float(res["cpus"]):
+        sys.exit(f"host has {cpus:g} CPUs; each attempt needs {res['cpus']}")
+    if res["concurrency"] * float(res["cpus"]) > cpus:
+        log(f"WARNING: {res['concurrency']} x {res['cpus']} CPUs oversubscribes a {cpus:g}-CPU host")
+    needed = res["concurrency"] * _memory_bytes(res["memory"]) + 4 * GIB
+    if needed > memory:
+        sys.exit(f"host has {memory / GIB:.1f} GiB; {res['concurrency']} x {res['memory']} plus 4 GiB headroom needs {needed / GIB:.1f} GiB")
+    free = shutil.disk_usage(results).free
+    if free < 30 * GIB:
+        sys.exit(f"only {free / GIB:.1f} GiB free under {results}; need at least 30 GiB")
+
+
+def _prepare(exp: config.Experiment, results: Path, allow_mixed: bool) -> tuple[str, str, dict]:
+    provenance = _provenance(exp)
+    manifest_path = results / "manifest.json"
+    if manifest_path.exists() and any((results / "attempts").glob("*/attempt.json")):
+        previous = read_json(manifest_path).get("provenance") or {}
+        if previous.get("experiment_digest") != provenance["experiment_digest"] and not allow_mixed:
+            sys.exit("results already hold attempts from a different experiment digest (code, prompts or config changed). Use a new results directory, or --allow-mixed.")
+    _preflight(exp, results)
     proxy_image = images.build_proxy(CACHE)
     agent_image, info = images.build_agent(exp, CACHE)
-    _manifest(exp, results, info, proxy_image)
-    network = images.Network(exp, proxy_image)
-    network.up()
-    return agent_image, network
+    history = read_json(manifest_path).get("invocations", []) if manifest_path.exists() else []
+    write_json(manifest_path, {
+        "experiment": exp.raw,
+        "provenance": provenance,
+        "invocations": [*history, {"at": time.time(), **provenance}],
+        "pins": config.pins(),
+        "agent_image": agent_image,
+        "agent_image_id": docker("image", "inspect", agent_image, "--format", "{{.Id}}").strip(),
+        "task_image": info["task_image"],
+        "task_image_id": docker("image", "inspect", exp.task_image, "--format", "{{.Id}}").strip(),
+        "eval_image": f"{exp.task_image.split(':')[0]}:{evaluate.eval_image_tag(exp)}",
+        "codex_config": info["codex_config"],
+        "proxy_image": proxy_image,
+        "prompts": {name: config.prompt(name) for name in ("builder", "checker", "task")},
+        "runner": {"python": platform.python_version()},
+        "host": {"docker": docker("version", "--format", "{{.Server.Version}}").strip(), "cpus": docker("info", "--format", "{{.NCPU}}").strip(), "memory_bytes": docker("info", "--format", "{{.MemTotal}}").strip()},
+    })
+    return agent_image, proxy_image, provenance
 
 
-def _run_attempts(exp: config.Experiment, results: Path, agent_image: str, network: images.Network, keep: bool) -> None:
-    attempts = [Attempt(exp, spec, results, agent_image, network.proxy_url, network.name, keep) for spec in exp.attempts()]
-    stop = lambda *_: [a.request_stop() for a in attempts]
+def _run_attempts(exp: config.Experiment, results: Path, agent_image: str, proxy_image: str, provenance: dict, keep: bool) -> None:
+    attempts = [Attempt(exp, spec, results, agent_image, proxy_image, provenance, keep) for spec in exp.attempts()]
+
+    def stop(*_: object) -> None:
+        log("stop requested: running attempts are force-stopped, queued attempts are skipped")
+        for attempt in attempts:
+            attempt.request_stop()
+
     signal.signal(signal.SIGTERM, stop)
     signal.signal(signal.SIGINT, stop)
     with ThreadPoolExecutor(max_workers=exp.resources["concurrency"]) as pool:
@@ -99,21 +154,25 @@ def _run_attempts(exp: config.Experiment, results: Path, agent_image: str, netwo
             log(f"[{meta['label']}] {meta['state']} after {meta.get('wall_seconds', 0) / 60:.1f} min")
 
 
-def cmd_run(exp: config.Experiment, keep: bool, skip_eval: bool) -> dict:
+def cmd_run(exp: config.Experiment, keep: bool, skip_eval: bool, allow_mixed: bool) -> dict:
     require_secret()
     results = _results(exp)
-    agent_image, network = _prepare(exp, results)
-    try:
-        _run_attempts(exp, results, agent_image, network, keep)
-    finally:
-        proxy_log = network.proxy_log()
-        (results / "proxy.log").write_text(proxy_log)
-        network.down()
+    agent_image, proxy_image, provenance = _prepare(exp, results, allow_mixed)
+    _run_attempts(exp, results, agent_image, proxy_image, provenance, keep)
     if not skip_eval:
         evaluate.evaluate(exp, results, CACHE)
-    summary = report.build(exp, results, proxy_log)
+    summary = report.build(exp, results)
     log(f"summary written to {results / 'summary.md'}")
+    _guard_secrets(results, summary)
     return summary
+
+
+def _guard_secrets(results: Path, summary: dict) -> None:
+    marker = results / "DO-NOT-PUBLISH.txt"
+    if summary["secrets"]["literal_key_hits"]:
+        marker.write_text("The API key appears in these artifacts:\n" + "\n".join(summary["secrets"]["literal_key_hits"]) + "\n")
+        sys.exit(f"SECRET LEAK: the API key appears in results; see {marker}")
+    marker.unlink(missing_ok=True)
 
 
 def cmd_eval(exp: config.Experiment, force: bool) -> None:
@@ -124,24 +183,19 @@ def cmd_eval(exp: config.Experiment, force: bool) -> None:
 
 def cmd_report(exp: config.Experiment) -> None:
     results = _results(exp)
-    proxy_log = (results / "proxy.log").read_text() if (results / "proxy.log").exists() else None
-    summary = report.build(exp, results, proxy_log)
+    summary = report.build(exp, results)
     print((results / "summary.md").read_text())
-    if summary["secrets"]["literal_key_hits"]:
-        sys.exit("SECRET LEAK: the API key appears in results; see summary.json")
+    _guard_secrets(results, summary)
 
 
 def cmd_smoke(exp: config.Experiment) -> None:
     require_secret()
     results = _results(exp)
-    agent_image, network = _prepare(exp, results)
-    s = smoke.Smoke(exp, results, CACHE, agent_image, network)
-    try:
-        s.isolation()
-        s.diagnostic_run()
-    finally:
-        network.down()
-    summary = cmd_run(exp, keep=False, skip_eval=False)
+    agent_image, proxy_image, _ = _prepare(exp, results, allow_mixed=False)
+    s = smoke.Smoke(exp, results, CACHE, agent_image, proxy_image)
+    s.isolation()
+    s.diagnostic_run()
+    summary = cmd_run(exp, keep=False, skip_eval=False, allow_mixed=False)
     smoke.pipeline_checks(s, summary)
     s.scoring_fidelity()
     outcome = s.summary()
@@ -154,8 +208,21 @@ def cmd_smoke(exp: config.Experiment) -> None:
 def cmd_cleanup(exp: config.Experiment) -> None:
     for container in docker("ps", "-aq", "--filter", f"label=zsbench.experiment={exp.id}").split():
         docker("rm", "-f", container, check=False)
-    images.Network(exp, "").down()
-    log(f"removed containers and network for {exp.id}")
+    for network in docker("network", "ls", "-q", "--filter", f"label=zsbench.experiment={exp.id}").split():
+        docker("network", "rm", network, check=False)
+    log(f"removed containers and networks for {exp.id}")
+
+
+def _hand_back_results() -> None:
+    """The runner runs as root; give the results back to the invoking host user."""
+    uid, gid = os.environ.get("ZSBENCH_HOST_UID"), os.environ.get("ZSBENCH_HOST_GID")
+    if not (uid and gid and RESULTS.exists()):
+        return
+    for path in [RESULTS, *RESULTS.rglob("*")]:
+        try:
+            os.lchown(path, int(uid), int(gid))
+        except OSError:
+            pass
 
 
 def main() -> None:
@@ -165,24 +232,28 @@ def main() -> None:
     parser.add_argument("--keep-containers", action="store_true", help="leave attempt containers for inspection")
     parser.add_argument("--skip-eval", action="store_true", help="run attempts without evaluating")
     parser.add_argument("--force", action="store_true", help="re-evaluate archives that already have results")
+    parser.add_argument("--allow-mixed", action="store_true", help="resume even if the experiment digest changed")
     args = parser.parse_args()
     load_secret_file(SECRET_FILE)
     default = ROOT / "experiments" / ("smoke.json" if args.command == "smoke" else "luna-xhigh-svgbob.json")
     exp = config.load(args.experiment or default)
-    if args.command == "plan":
-        cmd_plan(exp)
-    elif args.command == "check-key":
-        cmd_check_key(exp)
-    elif args.command == "smoke":
-        cmd_smoke(exp)
-    elif args.command == "run":
-        cmd_run(exp, args.keep_containers, args.skip_eval)
-    elif args.command == "eval":
-        cmd_eval(exp, args.force)
-    elif args.command == "report":
-        cmd_report(exp)
-    elif args.command == "cleanup":
-        cmd_cleanup(exp)
+    try:
+        if args.command == "plan":
+            cmd_plan(exp)
+        elif args.command == "check-key":
+            cmd_check_key(exp)
+        elif args.command == "smoke":
+            cmd_smoke(exp)
+        elif args.command == "run":
+            cmd_run(exp, args.keep_containers, args.skip_eval, args.allow_mixed)
+        elif args.command == "eval":
+            cmd_eval(exp, args.force)
+        elif args.command == "report":
+            cmd_report(exp)
+        elif args.command == "cleanup":
+            cmd_cleanup(exp)
+    finally:
+        _hand_back_results()
 
 
 if __name__ == "__main__":

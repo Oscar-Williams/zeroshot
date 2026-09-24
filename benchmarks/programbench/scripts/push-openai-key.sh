@@ -25,6 +25,7 @@ printf 'OPENAI_API_KEY=%s\n' "$key" | ssh "${ssh_args[@]}" "$host" '
   set -e
   umask 077
   mkdir -p ~/.config/zeroshot-bench
+  rm -f ~/.config/zeroshot-bench/openai.env.tmp
   cat > ~/.config/zeroshot-bench/openai.env.tmp
   mv ~/.config/zeroshot-bench/openai.env.tmp ~/.config/zeroshot-bench/openai.env
   chmod 600 ~/.config/zeroshot-bench/openai.env

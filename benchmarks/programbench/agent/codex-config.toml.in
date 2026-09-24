@@ -22,15 +22,23 @@ persistence = "none"
 [features]
 shell_snapshot = false
 
+# Codex memories could carry one thread's context into later "fresh" threads (for example from a
+# builder into a checker). Every node starts from its prompt alone.
+[memories]
+generate_memories = false
+use_memories = false
+
 # Zeroshot starts Codex with a minimal environment. Tool commands must still see the task
 # image's toolchain variables (CARGO_HOME, RUSTUP_HOME, ...) exactly as a plain shell in the
 # image would, plus the non-interactive pager settings the upstream baseline used. Credentials
 # must never reach tool commands: Codex only applies its KEY/SECRET/TOKEN filter when
 # ignore_default_excludes is false, so it is set explicitly and the patterns are listed too.
+# Proxy variables are withheld as well: only Codex itself talks to the model API, while tool
+# commands see no route out, as with the upstream baseline's --network none.
 [shell_environment_policy]
 inherit = "all"
 ignore_default_excludes = false
-exclude = ["*KEY*", "*SECRET*", "*TOKEN*", "*PASSWORD*", "*CREDENTIAL*"]
+exclude = ["*KEY*", "*SECRET*", "*TOKEN*", "*PASSWORD*", "*CREDENTIAL*", "*PROXY*"]
 
 [shell_environment_policy.set]
 @SET@

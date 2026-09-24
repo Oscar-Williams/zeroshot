@@ -30,11 +30,13 @@
   "resources": {
     "concurrency": 2,
     "cpus": 7,
-    "memory": "14g"
+    "memory": "13g",
+    "pids_limit": 8192
   },
   "eval": {
     "workers": 4,
-    "docker_cpus": 7
+    "docker_cpus": 7,
+    "timeout_seconds": 14400
   },
   "pricing": {
     "model": "gpt-5.6-luna",
@@ -48,9 +50,6 @@
     "retrieved": "2026-09-23"
   },
   "decision_rule": {
-    "metric": "not applicable to the smoke test",
-    "supported": "n/a",
-    "refuted": "n/a",
-    "otherwise": "n/a"
+    "note": "not applicable to the smoke test"
   }
 }
