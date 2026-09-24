@@ -199,6 +199,35 @@ class AccountingTests(unittest.TestCase):
         self.assertEqual(accounting.usage_from_events(events)["build"]["inputTokens"], 2300)  # truth: 1300
 
 
+class ArchiveTests(unittest.TestCase):
+    def test_tar_reports_its_own_status_and_archives_must_be_gzip(self):
+        from bench import attempt
+
+        original = attempt.docker_to_file
+        with tempfile.TemporaryDirectory() as tmp:
+            dest = Path(tmp, "a.tar.gz")
+
+            def fake(stderr: str, content: bytes):
+                def docker_to_file(args, path, timeout=None, ok_codes=(0,)):
+                    path.write_bytes(content)
+                    return stderr
+                return docker_to_file
+
+            try:
+                attempt.docker_to_file = fake("tar: ./x: file changed as we read it\nzsbench-tar-status=1\n", b"\x1f\x8b rest")
+                self.assertEqual(attempt.archive("c", "agent", ["tar"], dest), (1, "tar: ./x: file changed as we read it\n"))
+                attempt.docker_to_file = fake("Error response from daemon: container is not running\n", b"")
+                with self.assertRaisesRegex(RuntimeError, "tar did not run"):
+                    attempt.archive("c", "agent", ["tar"], dest)
+                self.assertFalse(dest.exists())
+                attempt.docker_to_file = fake("zsbench-tar-status=0\n", b"not gzip")
+                with self.assertRaisesRegex(RuntimeError, "not gzip"):
+                    attempt.archive("c", "agent", ["tar"], dest)
+                self.assertFalse(dest.exists())
+            finally:
+                attempt.docker_to_file = original
+
+
 class RerunLimitTests(unittest.TestCase):
     def test_an_attempt_that_errors_twice_is_not_run_a_third_time(self):
         from bench.attempt import Attempt
@@ -231,7 +260,10 @@ class AuditTests(unittest.TestCase):
         rules = audit.COMMAND_RULES
         self.assertTrue(rules["reference_binary_analysis"].search("objdump -d ./executable"))
         self.assertTrue(rules["binary_instrumentation"].search("LD_PRELOAD=./dump.so ./executable"))
-        self.assertFalse(rules["binary_instrumentation"].search("./executable < in.txt > out.svg"))
+        self.assertTrue(rules["binary_instrumentation"].search('os.environ["LD_AUDIT"] = "./audit.so"'))
+        self.assertTrue(rules["binary_instrumentation"].search("LD_LIBRARY_PATH=./fakelibc ./executable"))
+        for harmless in ("./executable < in.txt > out.svg", "unset LD_PRELOAD", "env -u LD_PRELOAD ./executable", "LD_LIBRARY_PATH=/opt/lib cc -o executable main.c"):
+            self.assertFalse(rules["binary_instrumentation"].search(harmless), harmless)
         self.assertTrue(rules["reference_binary_moved_or_copied"].search("mv /workspace/executable /tmp/ref"))
         self.assertFalse(rules["reference_binary_moved_or_copied"].search("./executable -s 'x' > out.svg"))
         self.assertTrue(rules["network_fetch"].search("cargo install svgbob_cli"))

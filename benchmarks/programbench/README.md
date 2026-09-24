@@ -25,8 +25,8 @@ single-worker baseline; the single arm checks that this baseline behaves like a 
 **Pre-registered decision rule** (also in the experiment file; computed in whole tests):
 
 - **Eligibility:** a loop run counts only if it completed; its build-1 snapshot was archived and
-  both it and the final workspace were scored on all tests (a workspace that fails to compile or
-  produces no executable scores 0, as on the leaderboard; an evaluation infrastructure error is
+  both it and the final workspace were scored on all tests (a workspace that fails to compile or to
+  produce a usable executable scores 0, as on the leaderboard; an evaluation infrastructure error is
   re-evaluated once and disqualifies the run if it persists); build 1 ended normally or at its node
   time limit (a crash or malformed response cuts the baseline short); it has no disqualifying audit
   finding (binary instrumentation such as `LD_PRELOAD`, `LD_AUDIT`, `LD_DEBUG` or ptrace, direct
@@ -34,10 +34,10 @@ single-worker baseline; the single arm checks that this baseline behaves like a 
   touch harness internals in round 1; neither scored workspace contains or builds the reference
   executable; and the Codex config, the harness files and the Codex home's instruction files were
   unchanged and checked after every node, with no transcript showing loaded `AGENTS.md`
-  instructions. All 5 loop runs must be eligible, otherwise the verdict is *inconclusive*.
-- **Supported:** every loop run gains at least 1 percentage point (above eval noise) and the
-  median gain is at least 5 points.
-- **Not supported:** the median gain is below 2 points. Otherwise *inconclusive*.
+  instructions. All 5 loop runs must be eligible, otherwise the verdict is *inconclusive*. -
+  **Supported:** every loop run gains at least 1 percentage point (above eval noise) and the median
+  gain is at least 5 points. - **Not supported:** the median gain is below 2 points. Otherwise
+  *inconclusive*.
 - Reported per run as covariates, not used for eligibility: whether the reference executable still
   existed after build 1 (a builder may overwrite it, leaving the checker only the documentation),
   rounds and verdicts, and cost.
@@ -126,10 +126,12 @@ re-derive it byte-for-byte.
   harness fingerprint; any change, or any transcript that shows loaded `AGENTS.md` instructions,
   makes a loop run ineligible. Codex memories are off as well.
 - **Harness integrity:** Zeroshot resolves `codex` through the `PATH` it starts with, for every
-  node, and the task image puts the world-writable `/usr/local/cargo/bin` first. The runner therefore
-  starts Zeroshot by absolute path with a `PATH` of root-owned directories only, so no node can plant
-  a `codex` that a later node would run with the key; tool shells keep the image's `PATH`. The smoke
-  test plants decoy `codex` and `zeroshot` executables there and requires that neither ever runs.
+  node, and the task image puts the world-writable `/usr/local/cargo/bin` first. The runner
+  therefore starts Zeroshot by absolute path, and runs every harness command (probes, archives,
+  Zeroshot calls), with a `PATH` of root-owned directories only, so no node can plant a `codex` that
+  a later node would run with the key, or a `tar` or `sha256sum` that would spoof the checks meant
+  to catch it; tool shells keep the image's `PATH`. The smoke test plants decoys of all of these
+  there and requires that none ever runs.
 - **Tooling parity:** Zeroshot starts Codex with a minimal environment, so the rendered Codex
   config mirrors the task image's ENV (`CARGO_HOME`, `RUSTUP_HOME`, …) into tool commands. It
   also gives them the image's plain `/tmp` as `TMPDIR`, instead of a directory inside Zeroshot's
@@ -148,7 +150,7 @@ a cloud instance role and with the metadata endpoint's hop limit at 1, as for th
 Requirements: Linux x86_64, rootful Docker 26 or newer, and an OpenAI API key with access to the
 model. The reference host for the pilot is 32 vCPU / 64 GB / Ubuntu 24.04 / Docker 29 (four
 attempts of 7 CPUs and 13 GB at a time); each attempt needs at least 7 CPUs, and the runner
-refuses hosts that cannot fit the configured concurrency. The runner requires 60 GB of free disk.
+refuses hosts that cannot fit the configured concurrency. The runner requires 60 GiB of free disk.
 
 ```bash
 git clone --branch benchmark/programbench https://github.com/the-open-engine/zeroshot.git
@@ -175,7 +177,7 @@ invoking user. `eval` and `report` re-score existing attempts with the current c
 code in the manifest and summary. To re-run the smoke test, move `results/smoke` aside first. Other
 settings: `ZSBENCH_RESULTS_DIR`, `ZSBENCH_SECRET_FILE`, `ZSBENCH_DOCKER_SOCK`, `ZSBENCH_IMAGE`;
 `--keep-containers` and `--skip-eval` for `run`. The runner runs under an init process, so a stop
-outside the attempt phase ends it at once; `cleanup` and `eval` refuse to run while another runner
+outside the attempt phase ends it at once (results are still handed back); `cleanup` and `eval` refuse to run while another runner
 is live.
 
 Other commands: `plan` (render graphs and the attempt order), `check-key`, `eval` (re-score),

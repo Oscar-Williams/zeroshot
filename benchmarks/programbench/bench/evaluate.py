@@ -18,10 +18,10 @@ from typing import Any
 from .config import Experiment, pins
 from .util import SECRET_ENV, download, log, read_json, sha256_file, write_json
 
-# Eval error codes that are outcomes of the submission itself: its compile.sh failed or timed
-# out, or it produced no ./executable. The leaderboard scores them 0 on every test, and so do we.
+# Eval error codes that are outcomes of the submission itself: its tree could not be committed,
+# its compile.sh failed or timed out, or it produced no usable ./executable. The leaderboard scores them 0 on every test, and so do we.
 # Any other error code, and any test-branch error, is an evaluation infrastructure failure.
-SUBMISSION_OUTCOMES = frozenset({"compile_failed", "copy_executable_failed"})
+SUBMISSION_OUTCOMES = frozenset({"compile_failed", "copy_executable_failed", "hash_executable_failed", "no_executable_hash", "seed_git_failed"})
 
 
 def infrastructure_error(score: dict[str, Any]) -> str | None:
@@ -119,10 +119,10 @@ def evaluate(exp: Experiment, results: Path, cache: Path, force: bool = False) -
         instance_dir.mkdir(parents=True, exist_ok=True)
         link = instance_dir / "submission.tar.gz"
         if link.exists() and not os.path.samefile(archive, link):
-            # The attempt was re-run: drop the stale link and its old results.
-            link.unlink()
-            for stale in instance_dir.glob("*.eval.json"):
-                stale.unlink()
+            if archive_id(link) != archive_id(archive):  # the attempt was re-run: drop its old results
+                for stale in instance_dir.glob("*.eval.json"):
+                    stale.unlink()
+            link.unlink()  # re-linked below; a copied results tree loses its hard links
         if not link.exists():
             os.link(archive, link)
         if force or not (instance_dir / f"{exp.instance_id}.eval.json").exists():

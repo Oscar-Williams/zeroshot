@@ -39,8 +39,10 @@ def log(message: str) -> None:
 
 
 def run(args: list[str], *, check: bool = True, timeout: float | None = None, input: bytes | None = None, stdout: Any = subprocess.PIPE) -> subprocess.CompletedProcess:
-    """Run a command with captured output. Never pass secret values in ``args``."""
-    return subprocess.run(args, input=input, stdout=stdout, stderr=subprocess.PIPE, timeout=timeout, check=check)
+    """Run a command with captured output. Never pass secret values in ``args``. Children get their
+    own session, so a Ctrl-C in the runner's terminal stops the runner gracefully instead of
+    killing the docker commands of attempts that are winding down."""
+    return subprocess.run(args, input=input, stdout=stdout, stderr=subprocess.PIPE, timeout=timeout, check=check, start_new_session=True)
 
 
 def docker(*args: str, check: bool = True, timeout: float | None = None, input: bytes | None = None) -> str:
@@ -56,7 +58,7 @@ def docker_to_file(args: list[str], path: Path, timeout: float | None = None, ok
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".partial")
     with tmp.open("wb") as out:
-        result = subprocess.run(["docker", *args], stdout=out, stderr=subprocess.PIPE, timeout=timeout)
+        result = subprocess.run(["docker", *args], stdout=out, stderr=subprocess.PIPE, timeout=timeout, start_new_session=True)
     stderr = result.stderr.decode(errors="replace")
     if result.returncode not in ok_codes:
         tmp.unlink(missing_ok=True)

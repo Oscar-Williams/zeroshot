@@ -165,7 +165,7 @@ def _run_attempts(exp: config.Experiment, results: Path, agent_image: str, proxy
                     continue
                 log(f"[{meta['label']}] {meta['state']} after {meta.get('wall_seconds', 0) / 60:.1f} min")
     finally:
-        # Outside the attempt phase a stop ends the runner at once (it runs under an init process).
+        # Outside the attempt phase a stop ends the runner at once (see _exit_on_signal).
         for sig, handler in previous.items():
             signal.signal(sig, handler)
     return stopped
@@ -173,6 +173,7 @@ def _run_attempts(exp: config.Experiment, results: Path, agent_image: str, proxy
 
 def cmd_run(exp: config.Experiment, keep: bool, skip_eval: bool, allow_mixed: bool) -> dict:
     require_secret()
+    _refuse_while_another_runner_runs("run")
     results = _results(exp)
     agent_image, proxy_image, provenance = _prepare(exp, results, allow_mixed)
     stopped = _run_attempts(exp, results, agent_image, proxy_image, provenance, keep)
@@ -270,6 +271,10 @@ def _hand_back_results() -> None:
             pass
 
 
+def _exit_on_signal(signum: int, _frame: object) -> None:
+    raise SystemExit(128 + signum)  # unwinds through `finally`, so results are still handed back
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="bench", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("command", choices=["plan", "check-key", "smoke", "run", "eval", "report", "cleanup"])
@@ -279,6 +284,7 @@ def main() -> None:
     parser.add_argument("--force", action="store_true", help="re-evaluate archives that already have results")
     parser.add_argument("--allow-mixed", action="store_true", help="resume even if the experiment digest changed")
     args = parser.parse_args()
+    signal.signal(signal.SIGTERM, _exit_on_signal)
     load_secret_file(SECRET_FILE)
     default = ROOT / "experiments" / ("smoke.json" if args.command == "smoke" else "luna-xhigh-svgbob.json")
     exp = config.load(args.experiment or default)

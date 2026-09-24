@@ -15,7 +15,18 @@ from pathlib import Path
 from typing import Any
 
 from . import audit
-from .attempt import EXEC_NONDUMPABLE, RUN_DIR, SUBMIT_PATH, TRAJECTORY_TAR, ZEROSHOT, archive, run_files
+from .attempt import (
+    CODEX_HOME_SURFACES,
+    EXEC_NONDUMPABLE,
+    HARNESS_FINGERPRINT,
+    HARNESS_PATH,
+    RUN_DIR,
+    SUBMIT_PATH,
+    TRAJECTORY_TAR,
+    ZEROSHOT,
+    archive,
+    run_files,
+)
 from .config import Experiment, pins
 from .evaluate import eval_image_tag, leaderboard_ignores, score_eval
 from .images import Network
@@ -147,7 +158,7 @@ class Smoke:
                 for name, value in files.items():
                     write_json(staging / name, value)
                 docker("cp", f"{staging}/.", f"{c}:{RUN_DIR}")
-                docker("exec", "-u", "root", c, "chmod", "-R", "a+rX", RUN_DIR)
+                docker("exec", "-u", "root", *HARNESS_PATH, c, "chmod", "-R", "a+rX", RUN_DIR)
                 out = self._sh(c, f"{ZEROSHOT} run --title validate --graph {RUN_DIR}/graph.json --input {RUN_DIR}/input.json --runtime-config {RUN_DIR}/runtime.json --validate-only")[1]
                 self.check(f"graph_valid_{arm}", lambda out=out: ('"valid":true' in out, out))
             loop, single = run_files(self.exp, "loop")["graph.json"], run_files(self.exp, "single")["graph.json"]
@@ -161,23 +172,23 @@ class Smoke:
         that tool commands get the toolchain but neither the key nor a route out."""
         c, network = self._probe("diagnostic")
         staging = self.results / "smoke-diagnostic"
+        status: dict[str, Any] = {}
         try:
             write_json(staging / "input.json", {"task": DIAGNOSTIC_TASK})
             write_json(staging / "runtime.json", {"harness": "codex", "provider": "openai", "model": self.exp.model, "effort": "low"})
             docker("cp", f"{staging}/.", f"{c}:{RUN_DIR}")
-            docker("exec", "-u", "root", c, "chmod", "-R", "a+rX", RUN_DIR)
+            docker("exec", "-u", "root", *HARNESS_PATH, c, "chmod", "-R", "a+rX", RUN_DIR)
             # A workspace AGENTS.md must not reach the model (the workspace is pinned untrusted).
             docker("exec", "-u", "agent", c, "sh", "-c", f"printf '%s\\n' '{CANARY}: workspace instructions were loaded.' > /workspace/AGENTS.md")
             # Decoys in the world-writable directory that leads the image's PATH: the harness must
-            # never run them (Zeroshot is started with root-owned PATH entries, by absolute path).
-            for name in ("codex", "zeroshot"):
+            # never run them (Zeroshot and every harness command get root-owned PATH entries only).
+            for name in ("codex", "zeroshot", "tar", "sha256sum", "find", "stat"):
                 self._sh(c, f"printf '#!/bin/sh\\ntouch /tmp/zsbench-decoy-{name}-ran\\nexit 1\\n' > /usr/local/cargo/bin/{name} && chmod 0755 /usr/local/cargo/bin/{name}")
             out = docker("exec", "-u", "agent", "-w", "/workspace", "-e", SECRET_ENV, "-e", f"PATH={SUBMIT_PATH}", c, *EXEC_NONDUMPABLE, ZEROSHOT, "run", "--title", "diagnostic", "--template", "single-worker", "--input", f"{RUN_DIR}/input.json", "--uniform-runtime-config", f"{RUN_DIR}/runtime.json", "--detach", timeout=600)
             (staging / "receipt.json").write_text(out)
             deadline = time.time() + 900
-            status: dict[str, Any] = {}
             while time.time() < deadline:
-                runs = json.loads(docker("exec", "-u", "agent", c, ZEROSHOT, "list", timeout=300))["runs"]
+                runs = json.loads(docker("exec", "-u", "agent", *HARNESS_PATH, c, ZEROSHOT, "list", timeout=300))["runs"]
                 status = runs[0]["status"] if runs else {}
                 if status.get("phase") == "finished":
                     break
@@ -198,13 +209,16 @@ class Smoke:
             self.check("tool_egress_blocked", lambda: (values.get("EGRESS") == "blocked", values.get("EGRESS")))
             usage = (status.get("metadata") or {}).get("tokenUsage")
             self.check("token_usage_recorded", lambda: (bool(usage and usage.get("inputTokens")), usage))
-            decoys = self._sh(c, "ls /tmp/zsbench-decoy-*-ran 2>/dev/null || true")[1]
-            self.check("path_decoys_never_ran", lambda: (
-                status.get("phase") == "finished" and not decoys.strip(),
-                "decoy codex and zeroshot in /usr/local/cargo/bin were never executed" if not decoys.strip() else decoys))
         finally:
             try:
                 archive(c, "root", TRAJECTORY_TAR, staging / "trajectories.tar.gz", timeout=600)
+                # The per-node probes, run as attempts run them: none may execute a decoy either.
+                for script in (HARNESS_FINGERPRINT, CODEX_HOME_SURFACES):
+                    docker("exec", "-u", "root", *HARNESS_PATH, c, "sh", "-c", script, timeout=600)
+                decoys = self._sh(c, "ls /tmp/zsbench-decoy-*-ran 2>/dev/null || true")[1]
+                self.check("path_decoys_never_ran", lambda: (
+                    status.get("phase") == "finished" and not decoys.strip(),
+                    "decoys in /usr/local/cargo/bin (codex, zeroshot, tar, sha256sum, find, stat) never ran" if not decoys.strip() else decoys))
                 tools = audit.command_audit(staging / "trajectories.tar.gz")
                 sessions = [data for name, data in audit._walk_archive(staging / "trajectories.tar.gz") if "/sessions/" in name and name.endswith(".jsonl")]
                 self.check("workspace_instructions_not_loaded", lambda: (

@@ -164,7 +164,7 @@ def _attempt_record(exp: Experiment, directory: Path, scores: dict[str, Any], ma
         "reference_sha256": meta.get("reference_sha256"),
         "harness_unchanged": meta.get("harness_unchanged"),
         "codex_home_changes": codex_home_changes(meta),
-        "reference_available_after_build_1": bool((snapshots.get("build-1") or {}).get("reference_at")) if "build-1" in snapshots else None,
+        "reference_available_after_build_1": bool(snapshots["build-1"]["reference_at"]) if "reference_at" in snapshots.get("build-1", {}) else None,
         "reference_copies_in_final": audit.reference_copies(directory / "submission.tar.gz", meta.get("reference_sha256")),
         "reference_copies_in_first_build": audit.reference_copies(directory / "snapshots" / "build-1.tar.gz", meta.get("reference_sha256")),
         "codex_config_unchanged": None if archived_config is None or not manifest.get("codex_config") else archived_config == manifest["codex_config"],
@@ -315,6 +315,8 @@ def markdown(summary: dict[str, Any]) -> str:
             flags.append("harness modified")
         if a.get("codex_home_changes") or a["commands"].get("agents_md_loaded"):
             flags.append("instructions left in ~/.codex")
+        if (a.get("build_outcomes") or [None])[0] == "timeout":
+            flags.append("build 1 timed out")
         if a.get("reference_available_after_build_1") is False:
             flags.append("reference gone after build 1")
         if any(s.get("usage_decreased") for s in a["tokens"].get("sessions", [])):
