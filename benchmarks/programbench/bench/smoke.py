@@ -231,26 +231,41 @@ def pipeline_checks(smoke: Smoke, summary: dict[str, Any]) -> None:
     smoke.check("pipeline_both_arms_complete", lambda: (bool(loop and single and loop["state"] == "complete" and single["state"] == "complete"), {k: v["state"] for k, v in attempts.items()}))
     smoke.check("pipeline_loop_snapshots_by_round", lambda: (bool(loop) and {"build-1", "check-1"} <= set(loop["rounds"]), loop and sorted(loop["rounds"])))
     smoke.check("pipeline_snapshots_without_errors", lambda: (all(not any("error" in s for s in (a.get("snapshots") or {}).values()) for a in attempts.values()), {k: {n: s.get("seconds") for n, s in (a.get("snapshots") or {}).items()} for k, a in attempts.items()}))
-    smoke.check("pipeline_single_snapshot_equals_final", lambda: (bool(single) and (single["rounds"].get("build-1") or {}).get("passed") == (single["rounds"].get("final") or {}).get("passed"), single and {k: v.get("passed") for k, v in single["rounds"].items()}))
+    smoke.check("pipeline_single_snapshot_equals_final", lambda: (
+        bool(single) and (single["rounds"].get("final") or {}).get("passed") is not None and (single["rounds"].get("build-1") or {}).get("passed") == single["rounds"]["final"]["passed"],
+        single and {k: v.get("passed") for k, v in single["rounds"].items()}))
     smoke.check("pipeline_scored_all_tests", lambda: (
         all((a["rounds"].get("final") or {}).get("scored_tests") == summary["expected_scored_tests"] for a in attempts.values()) and bool(summary["expected_scored_tests"]),
         {a["label"]: {k: (a["rounds"].get("final") or {}).get(k) for k in ("score", "passed", "scored_tests", "error_code", "duplicate_result_entries", "rerun_plugin_pinned")} for a in attempts.values()}))
-    smoke.check("pipeline_rerun_plugin_pinned", lambda: (all((v or {}).get("rerun_plugin_pinned") for a in attempts.values() for v in a["rounds"].values()), "every eval installed the pinned pytest-rerunfailures"))
+    smoke.check("pipeline_rerun_plugin_pinned", lambda: (
+        all(a["rounds"] for a in attempts.values()) and all((v or {}).get("rerun_plugin_pinned") for a in attempts.values() for v in a["rounds"].values()),
+        "every eval installed the pinned pytest-rerunfailures"))
     smoke.check("pipeline_costed_from_transcripts", lambda: (
         all(a["cost_usd"].get("total", 0) > 0 and a["tokens"]["sessions"] for a in attempts.values()),
         {k: {"cost": a["cost_usd"], "sessions": [(s["node"], s["turns"]) for s in a["tokens"]["sessions"]], "ledger_input": (a["tokens"]["ledger_total"] or {}).get("inputTokens"), "transcript_input": a["tokens"]["nodes"].get("total", {}).get("inputTokens")} for k, a in attempts.items()}))
 
     def transcripts_match_ledger() -> tuple[bool, Any]:
-        """Fresh threads (every check; the single arm's build) must agree exactly with the ledger;
-        only a resumed builder thread is over-counted there."""
+        """Fresh threads (every check; the single arm's build) must agree exactly with the ledger.
+        The ledger over-counts a resumed builder thread, and records nothing for an execution that
+        was interrupted (timeout, force-stop), so only nodes whose executions all ended normally
+        are compared."""
         detail: dict[str, Any] = {}
         for a in attempts.values():
             ledger_nodes, nodes = a["tokens"].get("ledger_nodes") or {}, a["tokens"]["nodes"]
+            ended_normally = {
+                "check": all(v in ("accepted", "rejected") for v in a["verdicts"]),
+                "build": all(b == "verified" for b in a["build_outcomes"]),
+            }
             for node in ["check"] + (["build"] if a["arm"] == "single" else []):
-                if node in ledger_nodes or node in nodes:
-                    same = ledger_nodes.get(node) == nodes.get(node)
-                    detail[f"{a['label']}.{node}"] = "match" if same else {"ledger": ledger_nodes.get(node), "transcripts": nodes.get(node)}
-        return bool(detail) and all(v == "match" for v in detail.values()), detail
+                if node not in ledger_nodes and node not in nodes:
+                    continue
+                if not ended_normally[node] or a.get("force_stopped"):
+                    detail[f"{a['label']}.{node}"] = "skipped: interrupted execution"
+                    continue
+                same = ledger_nodes.get(node) == nodes.get(node)
+                detail[f"{a['label']}.{node}"] = "match" if same else {"ledger": ledger_nodes.get(node), "transcripts": nodes.get(node)}
+        compared = [v for v in detail.values() if not str(v).startswith("skipped")]
+        return bool(compared) and all(v == "match" for v in compared), detail
 
     smoke.check("pipeline_transcripts_match_ledger", transcripts_match_ledger)
     smoke.check("pipeline_no_secret_in_artifacts", lambda: (summary["secrets"]["checked_literal_key"] and not summary["secrets"]["literal_key_hits"], summary["secrets"]))

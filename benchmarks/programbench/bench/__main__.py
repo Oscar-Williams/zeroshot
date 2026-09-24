@@ -173,6 +173,7 @@ def cmd_run(exp: config.Experiment, keep: bool, skip_eval: bool, allow_mixed: bo
     elif not skip_eval:
         evaluate.evaluate(exp, results, CACHE)
     summary = report.build(exp, results)
+    summary["stopped"] = stopped
     log(f"summary written to {results / 'summary.md'}")
     _guard_secrets(results, summary)
     return summary
@@ -207,6 +208,8 @@ def cmd_smoke(exp: config.Experiment) -> None:
     s.isolation()
     s.diagnostic_run()
     summary = cmd_run(exp, keep=False, skip_eval=False, allow_mixed=False)
+    if summary["stopped"]:
+        sys.exit("smoke stopped before the pipeline finished; nothing was checked after the stop")
     smoke.pipeline_checks(s, summary)
     s.scoring_fidelity()
     outcome = s.summary()
