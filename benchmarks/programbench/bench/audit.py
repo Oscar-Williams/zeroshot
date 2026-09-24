@@ -16,7 +16,9 @@ from typing import Any, Iterator
 
 from .util import secret_values
 
-KEY_SHAPE = re.compile(rb"sk-(?:proj-|svcacct-|admin-)?[A-Za-z0-9_-]{20,}")
+KEY_SHAPE = re.compile(rb"(?<![A-Za-z0-9_-])sk-(?:proj-|svcacct-|admin-)?[A-Za-z0-9_-]{20,}")
+# Tool results that mean the harness itself failed, not the command the model asked for.
+HARNESS_TOOL_ERROR = re.compile(r"failed to spawn|code-mode host")
 
 COMMAND_RULES = {
     "reference_binary_analysis": re.compile(
@@ -29,6 +31,7 @@ COMMAND_RULES = {
     "sudo": re.compile(r"(^|[\s;&|(])sudo\b"),
     "cached_dependency_sources": re.compile(r"(\.cargo/registry/src|/usr/local/cargo/registry/src|mod-cache/|/pkg/mod/)"),
     "harness_internals": re.compile(r"(\.local/state/zeroshot|/opt/zeroshot-bench|\.codex/sessions)"),
+    "process_environment_read": re.compile(r"/proc/\S*environ"),
 }
 
 
@@ -45,6 +48,7 @@ def secret_scan(root: Path) -> dict[str, Any]:
     """Look for the literal API key everywhere under ``root``, including inside archives."""
     needles = secret_values()
     hits, shaped = [], Counter()
+    shaped_where: list[str] = []
     for path in sorted(p for p in root.rglob("*") if p.is_file()):
         rel = str(path.relative_to(root))
         blobs: Iterator[tuple[str, bytes]]
@@ -58,11 +62,16 @@ def secret_scan(root: Path) -> dict[str, Any]:
         for member, data in blobs:
             if any(needle in data for needle in needles):
                 hits.append(f"{rel}:{member}" if member else rel)
-            shaped[rel] += len(KEY_SHAPE.findall(data))
+            found = len(KEY_SHAPE.findall(data))
+            if found:
+                shaped[rel] += found
+                if len(shaped_where) < 20:
+                    shaped_where.append(f"{rel}:{member}" if member else rel)
     return {
         "checked_literal_key": bool(needles),
         "literal_key_hits": hits,
         "key_shaped_strings": {k: v for k, v in shaped.items() if v},
+        "key_shaped_locations": shaped_where,
     }
 
 
@@ -94,6 +103,8 @@ def command_audit(trajectories: Path) -> dict[str, Any]:
     counts = Counter()
     web_calls = 0
     sessions = 0
+    tool_outputs = 0
+    harness_errors: list[str] = []
     if not trajectories.exists():
         return {"error": "no trajectories archive"}
     for name, data in _walk_archive(trajectories):
@@ -108,6 +119,12 @@ def command_audit(trajectories: Path) -> dict[str, Any]:
             payload = record.get("payload") or {}
             if payload.get("type") in ("web_search_call", "web_search"):
                 web_calls += 1
+            if payload.get("type") in ("custom_tool_call_output", "function_call_output"):
+                tool_outputs += 1
+                output = payload.get("output")
+                text = output if isinstance(output, str) else json.dumps(output)
+                if HARNESS_TOOL_ERROR.search(text or ""):
+                    harness_errors.append((text or "")[:300])
             for command in _commands(record):
                 counts["commands"] += 1
                 for rule, pattern in COMMAND_RULES.items():
@@ -115,7 +132,16 @@ def command_audit(trajectories: Path) -> dict[str, Any]:
                         counts[rule] += 1
                         if len(findings[rule]) < 25:
                             findings[rule].append(command[:300])
-    return {"sessions": sessions, "commands": counts.pop("commands", 0), "rule_counts": dict(counts), "web_search_calls": web_calls, "examples": {k: v for k, v in findings.items() if v}}
+    return {
+        "sessions": sessions,
+        "commands": counts.pop("commands", 0),
+        "tool_outputs": tool_outputs,
+        "harness_tool_errors": len(harness_errors),
+        "harness_tool_error_examples": harness_errors[:5],
+        "rule_counts": dict(counts),
+        "web_search_calls": web_calls,
+        "examples": {k: v for k, v in findings.items() if v},
+    }
 
 
 def proxy_audit(log_text: str) -> dict[str, Any]:

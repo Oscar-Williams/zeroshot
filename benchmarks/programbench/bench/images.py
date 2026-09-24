@@ -79,9 +79,11 @@ def build_agent(exp: Experiment, cache: Path) -> tuple[str, dict[str, str]]:
     context = cache / "agent-context" / tag.split(":", 1)[1]
     shutil.rmtree(context, ignore_errors=True)
     context.mkdir(parents=True)
-    for tool in ("zeroshot", "codex"):
-        archive = download(pin[tool]["url"], pin[tool]["sha256"], cache / "downloads" / Path(pin[tool]["url"]).name)
-        _extract(archive, pin[tool]["member"], context / tool)
+    zeroshot = download(pin["zeroshot"]["url"], pin["zeroshot"]["sha256"], cache / "downloads" / Path(pin["zeroshot"]["url"]).name)
+    _extract(zeroshot, pin["zeroshot"]["member"], context / "zeroshot")
+    codex = download(pin["codex"]["url"], pin["codex"]["sha256"], cache / "downloads" / Path(pin["codex"]["url"]).name)
+    with tarfile.open(codex) as tar:
+        tar.extractall(context / "codex-package", filter="data")
     shutil.copy(ROOT / "agent" / "Dockerfile", context / "Dockerfile")
     (context / "codex-config.toml").write_text(config)
     log(f"building {tag} from {exp.task_image}")

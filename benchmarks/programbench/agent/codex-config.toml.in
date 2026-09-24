@@ -16,12 +16,21 @@ enabled = false
 [history]
 persistence = "none"
 
+# Codex's shell snapshot re-exports the whole process environment into tool shells, bypassing the
+# shell_environment_policy exclusions below; with it on, tool commands could read the API key
+# (caught by the smoke test's KEY_VARS_VISIBLE probe). Tool shells start fresh instead.
+[features]
+shell_snapshot = false
+
 # Zeroshot starts Codex with a minimal environment. Tool commands must still see the task
 # image's toolchain variables (CARGO_HOME, RUSTUP_HOME, ...) exactly as a plain shell in the
-# image would, plus the non-interactive pager settings the upstream baseline used. Variables
-# whose names contain KEY, SECRET or TOKEN stay excluded by Codex's default filter.
+# image would, plus the non-interactive pager settings the upstream baseline used. Credentials
+# must never reach tool commands: Codex only applies its KEY/SECRET/TOKEN filter when
+# ignore_default_excludes is false, so it is set explicitly and the patterns are listed too.
 [shell_environment_policy]
 inherit = "all"
+ignore_default_excludes = false
+exclude = ["*KEY*", "*SECRET*", "*TOKEN*", "*PASSWORD*", "*CREDENTIAL*"]
 
 [shell_environment_policy.set]
 @SET@

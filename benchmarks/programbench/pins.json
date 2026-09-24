@@ -7,9 +7,9 @@
   },
   "codex": {
     "version": "0.155.0",
-    "url": "https://github.com/openai/codex/releases/download/rust-v0.155.0/codex-x86_64-unknown-linux-musl.tar.gz",
-    "sha256": "e415cc3adb94ade16e8d44b4dd58a9201cc34b2ee51a5d6eddf2a3a00aecb6c0",
-    "member": "codex-x86_64-unknown-linux-musl"
+    "url": "https://github.com/openai/codex/releases/download/rust-v0.155.0/codex-package-x86_64-unknown-linux-musl.tar.gz",
+    "sha256": "135bfe1af2d8d5954c12f03bee2cf8b40dffb06f76bb0ec3bd6105de5357e009",
+    "layout": "platform package: bin/codex, bin/codex-code-mode-host, codex-path/rg, codex-resources/"
   },
   "leaderboard_ignores": {
     "url": "https://raw.githubusercontent.com/ProgramBench/submissions/794fa30bbfd65059d5c67e192ceb6da659c9ef51/ignored_tests.json",

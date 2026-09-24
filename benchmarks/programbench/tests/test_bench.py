@@ -55,6 +55,24 @@ class GraphTests(unittest.TestCase):
             self.assertNotIn(scaffold, task)
 
 
+class CodexConfigTests(unittest.TestCase):
+    def test_rendered_config_keeps_credentials_and_web_out(self):
+        from bench import images
+
+        rendered = images.codex_config({"PATH": "/usr/bin", "CARGO_HOME": "/usr/local/cargo", "HOME": "/root"})
+        self.assertIn('web_search = "disabled"', rendered)
+        self.assertIn("shell_snapshot = false", rendered)
+        self.assertIn("ignore_default_excludes = false", rendered)
+        self.assertIn('"*KEY*"', rendered)
+        self.assertIn('CARGO_HOME = "/usr/local/cargo"', rendered)
+        self.assertNotIn("HOME = \"/root\"", rendered)
+        import tomllib
+
+        parsed = tomllib.loads(rendered)
+        self.assertFalse(parsed["features"]["shell_snapshot"])
+        self.assertEqual(parsed["shell_environment_policy"]["set"]["CARGO_HOME"], "/usr/local/cargo")
+
+
 class ConfigTests(unittest.TestCase):
     def _load(self, raw):
         with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:

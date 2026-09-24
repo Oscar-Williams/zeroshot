@@ -59,17 +59,24 @@ other line is verbatim. Zeroshot adds its standard node guidance around each pro
 ## Environment and isolation
 
 - **Task environment:** the official ProgramBench task image, pinned by digest, unchanged except
-  for the Zeroshot and Codex binaries (checksum-pinned releases) and a Codex config. The agent runs
+  for Zeroshot, Codex's full platform package (the CLI plus its `codex-code-mode-host` tool
+  runner and `rg`, checksum-pinned releases), and a Codex config. The agent runs
   as the image's non-root `agent` user with `SYS_PTRACE` dropped, like the upstream baseline. The
   reference executable is execute-only. The image's own sudo rules (package managers, cargo, go)
   are left as ProgramBench ships them.
 - **Network:** agent containers sit on an internal Docker network whose only exit is a tinyproxy
   that allows HTTPS `CONNECT` to `api.openai.com` and nothing else. Codex web search is disabled
-  (it runs server-side and would bypass the proxy). The upstream baseline used `--network none`,
-  which is impossible here because the agent itself calls the model API.
+  (it runs server-side and would bypass the proxy). Codex's own background requests (plugin and
+  account endpoints on github.com and chatgpt.com) are refused and show up in `proxy.log`. The
+  upstream baseline used `--network none`, which is impossible here because the agent itself
+  calls the model API.
 - **Secrets:** the API key reaches Zeroshot only through `docker exec -e OPENAI_API_KEY` (never
-  argv, never an image layer). Codex hides variables named `*KEY*` from tool commands, which the
-  smoke test verifies. Every artifact, including archive contents, is scanned for the literal key.
+  argv, never an image layer). Tool commands must not see it: the Codex config applies its
+  KEY/SECRET/TOKEN exclusions explicitly and turns off Codex's shell snapshot, which otherwise
+  re-exports the whole process environment (including the key) into tool shells. The smoke test
+  proves this from inside a real run (`KEY_VARS_VISIBLE=0`). A same-user process could still read
+  `/proc/*/environ`; the audit flags that, and every artifact, including archive contents, is
+  scanned for the literal key.
 - **Tooling parity:** Zeroshot starts Codex with a minimal environment, so the rendered Codex
   config mirrors the task image's ENV (`CARGO_HOME`, `RUSTUP_HOME`, …) into tool commands.
 

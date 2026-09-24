@@ -3,9 +3,13 @@
 ARG TASK_IMAGE
 FROM ${TASK_IMAGE}
 USER root
-COPY --chmod=0755 zeroshot codex /usr/local/bin/
+COPY --chmod=0755 zeroshot /usr/local/bin/zeroshot
+# Codex's full platform package, as the npm distribution installs it: the CLI finds its helpers
+# (codex-code-mode-host for tool calls, rg, bwrap) relative to its own executable.
+COPY codex-package /opt/codex
 COPY codex-config.toml /home/agent/.codex/config.toml
-RUN chown -R agent:agent /home/agent/.codex \
+RUN ln -s /opt/codex/bin/codex /usr/local/bin/codex \
+    && chown -R agent:agent /home/agent/.codex \
     && chmod 0700 /home/agent/.codex \
     && mkdir -p /opt/zeroshot-bench/run \
     && chmod 0755 /opt/zeroshot-bench /opt/zeroshot-bench/run \

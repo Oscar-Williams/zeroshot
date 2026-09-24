@@ -1,6 +1,6 @@
 {
   "id": "smoke",
-  "description": "Pipeline smoke test: the real prompts, graphs, model and effort with short limits, one run per arm.",
+  "description": "Pipeline smoke test: the real prompts, graphs, model and effort with short limits (20-minute builds, 8-minute checks, 45-minute cap), one run per arm.",
   "task": {
     "instance_id": "ivanceras__svgbob.6d00ad9",
     "image": "programbench/ivanceras_1776_svgbob.6d00ad9:task_cleanroom_v6@sha256:8656583769698b008c6ca1b02ca7da4207a4a3c7dc2d8105d82dc6ae0a2a6f67"
@@ -10,14 +10,22 @@
     "effort": "xhigh"
   },
   "arms": {
-    "loop": { "repeats": 1, "max_iterations": 2 },
-    "single": { "repeats": 1 }
+    "loop": {
+      "repeats": 1,
+      "max_iterations": 2
+    },
+    "single": {
+      "repeats": 1
+    }
   },
-  "order": ["loop", "single"],
+  "order": [
+    "loop",
+    "single"
+  ],
   "limits": {
-    "attempt_seconds": 1800,
-    "build_timeout_ms": 600000,
-    "check_timeout_ms": 420000
+    "attempt_seconds": 2700,
+    "build_timeout_ms": 1200000,
+    "check_timeout_ms": 480000
   },
   "resources": {
     "concurrency": 2,
@@ -30,7 +38,12 @@
   },
   "pricing": {
     "model": "gpt-5.6-luna",
-    "usd_per_million_tokens": { "input": 0.2, "cached_input": 0.02, "cache_write": 0.25, "output": 1.2 },
+    "usd_per_million_tokens": {
+      "input": 0.2,
+      "cached_input": 0.02,
+      "cache_write": 0.25,
+      "output": 1.2
+    },
     "source": "https://developers.openai.com/api/docs/pricing",
     "retrieved": "2026-09-23"
   },

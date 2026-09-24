@@ -11,6 +11,7 @@ from typing import Any, Callable
 
 from .attempt import RUN_DIR, run_files
 from .config import Experiment
+from . import audit
 from .evaluate import leaderboard_ignores, score_eval
 from .images import Network
 from .util import SECRET_ENV, docker, log, write_json
@@ -32,6 +33,7 @@ DIAGNOSTIC_TASK = """This is an environment diagnostic, not a coding task. Run e
   echo "RUSTC=$(rustc --version 2>&1 | head -1)"
   echo "GO=$(go version 2>&1 | head -1)"
   echo "PYTHON=$(python3 --version 2>&1)"
+  echo "RG=$(command -v rg || echo missing)"
   if curl -sS -m 8 -o /dev/null https://example.com 2>/dev/null; then echo "EGRESS=open"; else echo "EGRESS=blocked"; fi
 } > /workspace/.zsbench-diagnostic.txt 2>&1
 ```
@@ -142,7 +144,15 @@ class Smoke:
             usage = (status.get("metadata") or {}).get("tokenUsage")
             self.check("token_usage_recorded", lambda: (bool(usage and usage.get("inputTokens")), usage))
         finally:
-            docker("rm", "-f", c, check=False)
+            try:
+                from .attempt import TRAJECTORY_TAR
+                from .util import docker_to_file
+
+                docker_to_file(["exec", "-u", "root", c, *TRAJECTORY_TAR], self.results / "smoke-diagnostic" / "trajectories.tar.gz", timeout=600)
+                tools = audit.command_audit(self.results / "smoke-diagnostic" / "trajectories.tar.gz")
+                self.check("diagnostic_tools_worked", lambda: (tools.get("harness_tool_errors") == 0 and tools.get("tool_outputs", 0) >= 1, {k: tools.get(k) for k in ("tool_outputs", "harness_tool_errors", "harness_tool_error_examples")}))
+            finally:
+                docker("rm", "-f", c, check=False)
 
     def scoring_fidelity(self) -> None:
         """Evaluate a published leaderboard submission on this task and compare scores."""
@@ -191,3 +201,17 @@ def pipeline_checks(smoke: Smoke, summary: dict[str, Any]) -> None:
     egress = summary.get("egress") or {}
     smoke.check("pipeline_egress_only_model_api", lambda: (set(egress.get("established") or {}) == {"api.openai.com"}, {k: egress.get(k) for k in ("established", "refused")}))
     smoke.check("pipeline_no_web_search", lambda: (all(not a["commands"].get("web_search_calls") for a in attempts.values()), {k: a["commands"].get("web_search_calls") for k, a in attempts.items()}))
+    smoke.check("pipeline_tools_worked", lambda: (
+        all(a["commands"].get("harness_tool_errors") == 0 and a["commands"].get("tool_outputs", 0) >= 10 for a in attempts.values()),
+        {k: {f: a["commands"].get(f) for f in ("tool_outputs", "harness_tool_errors", "harness_tool_error_examples")} for k, a in attempts.items()}))
+    results = smoke.results
+    def has_compile_sh(label: str) -> bool:
+        import tarfile
+
+        with tarfile.open(results / "attempts" / label / "submission.tar.gz") as tar:
+            return any(m.name in ("./compile.sh", "compile.sh") for m in tar.getmembers())
+    smoke.check("pipeline_builder_produced_compile_sh", lambda: (all(has_compile_sh(a["label"]) for a in attempts.values()), "compile.sh present in every final workspace"))
+    scores = json.loads((results / "scores.json").read_text())
+    smoke.check("pipeline_hidden_tests_ran", lambda: (
+        all((scores.get(f"{a['label']}__final") or {}).get("scored_tests", 0) > 0 for a in attempts.values()),
+        {a["label"]: {k: (scores.get(f"{a['label']}__final") or {}).get(k) for k in ("score", "passed", "scored_tests", "error_code")} for a in attempts.values()}))
