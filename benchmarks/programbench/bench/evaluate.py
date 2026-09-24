@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import Experiment, pins
-from .util import SECRET_ENV, download, log, read_json, write_json
+from .util import SECRET_ENV, download, log, read_json, sha256_file, write_json
 
 # Eval error codes that are outcomes of the submission itself: its compile.sh failed or timed
 # out, or it produced no ./executable. The leaderboard scores them 0 on every test, and so do we.
@@ -37,9 +37,9 @@ def infrastructure_error(score: dict[str, Any]) -> str | None:
 
 
 def archive_id(path: Path) -> str:
-    """Identity of one archive file: a re-run attempt writes a new file under the same label."""
-    stat = path.stat()
-    return f"{stat.st_ino}:{stat.st_size}:{stat.st_mtime_ns}"
+    """Content hash of one archive: a re-run attempt writes different bytes under the same label,
+    and unlike file metadata the hash survives copying the results elsewhere."""
+    return sha256_file(path)
 
 
 def rerun_plugin_active(raw: dict[str, Any]) -> bool | None:
@@ -172,7 +172,10 @@ def _scores(exp: Experiment, results: Path, ignores: dict[str, list[str]]) -> di
     scores: dict[str, Any] = {}
     for label, archive in targets(results):
         eval_json = results / "evals" / label / exp.instance_id / f"{exp.instance_id}.eval.json"
-        scores[label] = score_eval(eval_json, exp.instance_id, ignores) if eval_json.exists() else {"score": None, "error_code": "not_evaluated"}
+        try:
+            scores[label] = score_eval(eval_json, exp.instance_id, ignores) if eval_json.exists() else {"score": None, "error_code": "not_evaluated"}
+        except ValueError as error:  # e.g. eval.json cut short when the evaluation was killed
+            scores[label] = {"score": None, "error_code": "not_evaluated", "error_details": f"unreadable eval.json: {str(error)[:300]}"}
         scores[label]["archive_id"] = archive_id(archive)
     return scores
 

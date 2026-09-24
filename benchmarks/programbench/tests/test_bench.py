@@ -449,6 +449,29 @@ class EvalTests(unittest.TestCase):
             labels = [label for label, _ in evaluate.targets(Path(tmp))]
         self.assertEqual(labels, ["01-loop__final", "01-loop__build-1"])
 
+    def test_archive_identity_survives_copies_and_unreadable_evals_count_as_not_evaluated(self):
+        from bench import evaluate
+
+        with tempfile.TemporaryDirectory() as tmp:
+            results = Path(tmp, "results")
+            archive = _tar(Path(tmp, "a.tar.gz"), {"x": b"1"})
+            copy = Path(tmp, "copy.tar.gz")
+            copy.write_bytes(archive.read_bytes())
+            self.assertEqual(evaluate.archive_id(archive), evaluate.archive_id(copy))
+            attempt = results / "attempts" / "01-loop"
+            attempt.mkdir(parents=True)
+            _tar(attempt / "submission.tar.gz", {"x": b"1"})
+            eval_json = results / "evals" / "01-loop__final" / EXPERIMENT.instance_id / f"{EXPERIMENT.instance_id}.eval.json"
+            eval_json.parent.mkdir(parents=True)
+            eval_json.write_text('{"test_results": [')  # killed mid-write
+            original = evaluate.score_eval
+            evaluate.score_eval = lambda path, iid, ignores: json.loads(path.read_text())
+            try:
+                scores = evaluate._scores(EXPERIMENT, results, {})
+            finally:
+                evaluate.score_eval = original
+        self.assertEqual(scores["01-loop__final"]["error_code"], "not_evaluated")
+
     def test_rerun_plugin_is_pinned(self):
         try:
             from bench import pbeval
