@@ -195,14 +195,15 @@ def _node_of(first_prompt: str) -> str:
     return "other"
 
 
-def loaded_workspace_instructions(record: dict[str, Any]) -> bool:
-    """Whether a transcript record shows Codex loading AGENTS.md from the workspace (it must not:
-    the Codex config pins /workspace as untrusted)."""
+def loaded_agents_md(record: dict[str, Any]) -> bool:
+    """Whether a transcript record shows Codex loading AGENTS.md instructions, from the workspace
+    or from ~/.codex. Nothing in the setup provides any, so they could only come from an earlier
+    node (the workspace is pinned untrusted; ~/.codex is shared by all nodes)."""
     payload = record.get("payload") or {}
     if record.get("type") == "world_state" and ((payload.get("state") or {}).get("agents_md") or {}).get("text"):
         return True
     if payload.get("type") == "message" and payload.get("role") == "user":
-        return any(str(c.get("text", "")).startswith("# AGENTS.md instructions for") for c in payload.get("content") or [] if isinstance(c, dict))
+        return any(str(c.get("text", "")).startswith("# AGENTS.md instructions") for c in payload.get("content") or [] if isinstance(c, dict))
     return False
 
 
@@ -262,7 +263,7 @@ def command_audit(trajectories: Path) -> dict[str, Any]:
                 text = output if isinstance(output, str) else json.dumps(output)
                 if HARNESS_TOOL_ERROR.search(text or ""):
                     harness_errors.append((text or "")[:300])
-            if loaded_workspace_instructions(record):
+            if loaded_agents_md(record):
                 instructions_loaded += 1
             item = payload.get("item") or {}
             if kind == "item_completed" and item.get("type") == "FileChange":
@@ -288,7 +289,7 @@ def command_audit(trajectories: Path) -> dict[str, Any]:
         "rule_counts": dict(counts),
         "rule_counts_by_turn": {k: dict(v) for k, v in by_turn.items()},
         "web_search_calls": web_calls,
-        "workspace_instructions_loaded": instructions_loaded,
+        "agents_md_loaded": instructions_loaded,
         "examples": {k: v for k, v in findings.items() if v},
     }
 

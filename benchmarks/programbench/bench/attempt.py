@@ -49,6 +49,16 @@ HARNESS_FINGERPRINT = (
     "while read -r f; do if [ -L \"$f\" ]; then echo \"link $f $(readlink \"$f\")\"; "
     "else echo \"file $f $(stat -c %a:%u \"$f\") $(sha256sum < \"$f\" | cut -c1-64)\"; fi; done | sha256sum | cut -c1-64"
 )
+# Files in the Codex home (shared by every node) that a later Codex session would load or run:
+# the config, user AGENTS.md, skills (Codex manages skills/.system itself), prompts, rules, hooks,
+# plugins and profile configs. Recorded after every node, since a node could change them for the
+# next one and restore them before the end; only config.toml exists at the start.
+CODEX_HOME_SURFACES = (
+    "cd /home/agent/.codex 2>/dev/null || exit 0; "
+    "{ find . -maxdepth 1 -type f \\( -name 'AGENTS*.md' -o -name '*config.toml' -o -name 'hooks*' \\); "
+    "find skills prompts rules hooks plugins -path skills/.system -prune -o -type f -print; } 2>/dev/null | LC_ALL=C sort | "
+    "while read -r f; do echo \"$f $(sha256sum < \"$f\" | cut -c1-16)\"; done"
+)
 FINISH_GRACE_SECONDS = 900
 NEUTRAL_TITLE = "programbench attempt"
 
@@ -172,6 +182,7 @@ class Attempt:
             raise RuntimeError("reference executable missing at start")
         self.meta["reference_size"], self.meta["reference_sha256"] = int(size_and_hash[0]), size_and_hash[1]
         self.meta["harness_fingerprint"] = self._harness_fingerprint()
+        self.meta["codex_home_surfaces"] = self._codex_home_surfaces()
 
     def _submit(self) -> str:
         receipt_text = docker(
@@ -203,13 +214,18 @@ class Attempt:
         log(f"[{self.spec.label}] submitted run {run_id}")
         return run_id
 
+    def _codex_home_surfaces(self) -> list[str]:
+        return docker("exec", "-u", "root", self.name, "sh", "-c", CODEX_HOME_SURFACES, timeout=300).splitlines()
+
     def _harness_fingerprint(self) -> str:
         return docker("exec", "-u", "root", self.name, "sh", "-c", HARNESS_FINGERPRINT, timeout=600).strip()
 
     def _check_harness(self) -> None:
+        """Compare the harness fingerprint at the end, and after every node, with the start."""
         try:
-            after = self._harness_fingerprint()
-            self.meta["harness_unchanged"] = bool(self.meta.get("harness_fingerprint")) and after == self.meta["harness_fingerprint"]
+            after = [self._harness_fingerprint(), *(s["harness_fingerprint"] for s in self.meta["snapshots"].values() if s.get("harness_fingerprint"))]
+            self.meta["harness_unchanged"] = bool(self.meta.get("harness_fingerprint")) and all(f == self.meta["harness_fingerprint"] for f in after)
+            self.meta["codex_home_surfaces_end"] = self._codex_home_surfaces()
         except Exception as error:
             self.meta["harness_check_error"] = f"{type(error).__name__}: {error}"
 
@@ -302,6 +318,8 @@ class Attempt:
             if warnings.strip():
                 self.meta["snapshot_warnings"][label] = warnings
             record["reference_at"] = self._reference_locations()
+            record["codex_home_surfaces"] = self._codex_home_surfaces()
+            record["harness_fingerprint"] = self._harness_fingerprint()
         except Exception as error:  # a snapshot must never cost the run
             record["error"] = f"{type(error).__name__}: {error}"
         record["seconds"] = round(time.time() - started, 2)

@@ -85,8 +85,8 @@ re-derive it byte-for-byte.
   for Zeroshot and Codex's full platform package (checksum-pinned releases) and a Codex config.
   The agent runs as the image's non-root `agent` user; the reference executable is execute-only.
   The image's own sudo rules (package managers, cargo, go) are left as ProgramBench ships them.
-  Their install hooks amount to root, so the harness files (Zeroshot, Codex) are fingerprinted at
-  the start and end of every attempt, and a change disqualifies the run.
+  Their install hooks amount to root, so the harness files (Zeroshot, Codex, Codex's system config)
+  are fingerprinted at the start, after every node and at the end, and a change disqualifies the run.
 - **Network:** every attempt gets its own internal Docker network whose only exit is its own
   tinyproxy, which allows HTTPS `CONNECT` to `api.openai.com` and nothing else. Tool commands get
   no proxy settings and no DNS, so they have no route out, like the upstream `--network none`;
@@ -103,13 +103,16 @@ re-derive it byte-for-byte.
   Every artifact — plain files, archive members, nested archives, and the decompressed git objects
   of archived repositories — is scanned for the literal key; a hit writes `DO-NOT-PUBLISH.txt` and
   fails the command.
-- **Node independence:** every node starts from its prompt and this configuration alone. Left
-  alone, Codex marks `/workspace` trusted on first use and then loads `AGENTS.md` files and
+- **Node independence:** every node starts from its prompt and this configuration alone. Left alone,
+  Codex marks `/workspace` trusted on first use and then loads `AGENTS.md` files and
   `.codex/config.toml` layers from the workspace into every later node, so a builder could instruct
   the checker or undo the settings above. The Codex config pins the workspace as untrusted, which
   leaves the explicit sandbox and approval settings in force; the smoke test plants a canary
-  `AGENTS.md` to prove it is never loaded, and the audit checks every transcript for loaded workspace
-  instructions. Codex memories are off as well.
+  `AGENTS.md` to prove it is never loaded. The Codex home (`~/.codex`) is shared by all nodes and
+  Codex also reads user instructions, skills, rules and hooks from it, so after every node the
+  runner records those files and the config (none but the config exist at the start) along with the
+  harness fingerprint; any change, or any transcript that shows loaded `AGENTS.md` instructions,
+  makes a loop run ineligible. Codex memories are off as well.
 - **Tooling parity:** Zeroshot starts Codex with a minimal environment, so the rendered Codex
   config mirrors the task image's ENV (`CARGO_HOME`, `RUSTUP_HOME`, …) into tool commands. It
   also gives them the image's plain `/tmp` as `TMPDIR`, instead of a directory inside Zeroshot's

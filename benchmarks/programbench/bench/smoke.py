@@ -185,8 +185,8 @@ class Smoke:
                 tools = audit.command_audit(staging / "trajectories.tar.gz")
                 sessions = [data for name, data in audit._walk_archive(staging / "trajectories.tar.gz") if "/sessions/" in name and name.endswith(".jsonl")]
                 self.check("workspace_instructions_not_loaded", lambda: (
-                    bool(sessions) and tools.get("workspace_instructions_loaded") == 0 and not any(_canary_outside_tools(data) for data in sessions),
-                    f"{len(sessions)} session(s); workspace AGENTS.md loaded {tools.get('workspace_instructions_loaded')} time(s)"))
+                    bool(sessions) and tools.get("agents_md_loaded") == 0 and not any(_canary_outside_tools(data) for data in sessions),
+                    f"{len(sessions)} session(s); AGENTS.md loaded {tools.get('agents_md_loaded')} time(s)"))
                 self.check("diagnostic_tools_worked", lambda: (tools.get("harness_tool_errors") == 0 and tools.get("tool_outputs", 0) >= 1, {k: tools.get(k) for k in ("tool_outputs", "harness_tool_errors", "harness_tool_error_examples")}))
             finally:
                 docker("rm", "-f", c, check=False)
@@ -277,6 +277,9 @@ def pipeline_checks(smoke: Smoke, summary: dict[str, Any]) -> None:
     smoke.check("pipeline_no_reference_in_archives", lambda: (
         all(reference_absent(a) for a in attempts.values()),
         {k: {"reference_sha256": (a.get("reference_sha256") or "")[:12], "in_final": a["reference_copies_in_final"], "in_build_1": a.get("reference_copies_in_first_build")} for k, a in attempts.items()}))
+    smoke.check("pipeline_codex_home_clean", lambda: (
+        all(not a.get("codex_home_changes") and not a["commands"].get("agents_md_loaded") for a in attempts.values()),
+        {k: {"changes": a.get("codex_home_changes"), "agents_md_loaded": a["commands"].get("agents_md_loaded")} for k, a in attempts.items()}))
     smoke.check("pipeline_harness_unchanged", lambda: (all(a.get("harness_unchanged") is True for a in attempts.values()), {k: a.get("harness_unchanged") for k, a in attempts.items()}))
     smoke.check("pipeline_codex_config_unchanged", lambda: (all(a["codex_config_unchanged"] is True for a in attempts.values()), {k: a["codex_config_unchanged"] for k, a in attempts.items()}))
     smoke.check("pipeline_provenance_recorded", lambda: (

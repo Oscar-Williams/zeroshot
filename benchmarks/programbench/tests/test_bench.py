@@ -240,13 +240,15 @@ class AuditTests(unittest.TestCase):
         self.assertEqual(result["rule_counts"]["binary_instrumentation"], 1)
         self.assertEqual(result["rule_counts_by_turn"]["build.turn1"]["process_environment_read"], 1)
 
-    def test_loaded_workspace_instructions_are_detected(self):
+    def test_loaded_agents_md_is_detected(self):
         # The two records Codex 0.155.0 writes when it loads a workspace AGENTS.md.
         world = {"type": "world_state", "payload": {"full": True, "state": {"agents_md": {"directory": "/workspace", "text": "x"}}}}
         message = {"type": "response_item", "payload": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "# AGENTS.md instructions for /workspace\n\n<INSTRUCTIONS>x"}]}}
-        self.assertTrue(audit.loaded_workspace_instructions(world))
-        self.assertTrue(audit.loaded_workspace_instructions(message))
-        self.assertFalse(audit.loaded_workspace_instructions({"type": "world_state", "payload": {"full": True, "state": {"agents_md": None}}}))
+        user_level = {"type": "response_item", "payload": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "# AGENTS.md instructions\n\n<INSTRUCTIONS>x"}]}}
+        self.assertTrue(audit.loaded_agents_md(world))
+        self.assertTrue(audit.loaded_agents_md(message))
+        self.assertTrue(audit.loaded_agents_md(user_level))
+        self.assertFalse(audit.loaded_agents_md({"type": "world_state", "payload": {"full": True, "state": {"agents_md": {}}}}))
 
     def test_turns_continue_across_builder_threads(self):
         # A failed build makes Zeroshot start a new builder thread; its first turn is round 2.
@@ -354,6 +356,12 @@ class DecisionTests(unittest.TestCase):
             (discarded / "attempt.json").write_text(json.dumps({"label": "03-loop", "state": "error", "error": "RuntimeError: boom", "wall_seconds": 12}))
             entries = report._discarded(Path(tmp), EXPERIMENT.pricing)
         self.assertEqual(entries, [{"directory": "03-loop.discarded-1700000000", "label": "03-loop", "state": "error", "error": "RuntimeError: boom", "force_stopped": None, "wall_seconds": 12, "cost_usd": None}])
+
+    def test_files_left_in_codex_home_make_a_run_ineligible(self):
+        meta = {"codex_home_surfaces": [], "snapshots": {"build-1": {"codex_home_surfaces": ["./AGENTS.md 0123456789abcdef"]}}, "codex_home_surfaces_end": []}
+        self.assertEqual(report.codex_home_changes(meta), ["./AGENTS.md 0123456789abcdef"])
+        run = self._loop("01", 200, 260, codex_home_changes=report.codex_home_changes(meta))
+        self.assertTrue(any(r.startswith("a node left files for later Codex sessions") for r in run["ineligible_reasons"]))
 
     def test_building_the_reference_makes_a_run_ineligible(self):
         run = self._loop("01", 200, 260, reference_sha256="ab" * 32)
