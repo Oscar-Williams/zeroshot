@@ -3435,7 +3435,7 @@ Regenerate it with <code>cargo run -p zeroshot --example generate_cli_docs -- --
 <h3 id="zeroshot-resume"><code>zeroshot resume</code><a class="headerlink" href="#zeroshot-resume" title="Permanent link">&para;</a></h3>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-39-1" name="__codelineno-39-1" href="#__codelineno-39-1"></a>Start a new attempt from a failed run's retained workspace or a saved checkpoint.
 <a id="__codelineno-39-2" name="__codelineno-39-2" href="#__codelineno-39-2"></a>
-<a id="__codelineno-39-3" name="__codelineno-39-3" href="#__codelineno-39-3"></a>By default, restart the original graph using its latest retained workspace. Use --from-checkpoint to continue from a checkpoint listed by `zeroshot checkpoints`.
+<a id="__codelineno-39-3" name="__codelineno-39-3" href="#__codelineno-39-3"></a>By default, restart the original graph using its latest retained workspace. Use --from-checkpoint to continue from a checkpoint listed by `zeroshot checkpoints`. The successor resolves credentials again. Export GH_TOKEN before resuming a named-target run that needs it for private source checkout or Git delivery.
 <a id="__codelineno-39-4" name="__codelineno-39-4" href="#__codelineno-39-4"></a>
 <a id="__codelineno-39-5" name="__codelineno-39-5" href="#__codelineno-39-5"></a>Usage: zeroshot resume [OPTIONS] &lt;RUN_ID&gt;
 <a id="__codelineno-39-6" name="__codelineno-39-6" href="#__codelineno-39-6"></a>

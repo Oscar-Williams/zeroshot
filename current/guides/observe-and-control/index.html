@@ -1714,17 +1714,18 @@ prerequisite outputs. The selected node runs again. Parallel and mapped groups h
 for the whole outer group, including nested groups and all mapped batches; individual concurrent
 writers do not have separate snapshots. Read-only boundaries can share the same workspace bytes.</p>
 <p>Both modes create a new run ID, keep the original graph, input, source, and delivery lineage, and
-resolve fresh credentials. Provider sessions and previous token usage are not carried into the new
-attempt. Selecting a checkpoint replaces later workspace edits, including untracked and ignored
+resolve credentials again. The successor does not inherit provider sessions, secrets, or previous
+token usage. Selecting a checkpoint replaces later workspace edits, including untracked and ignored
 files. Restart restores the latest completed snapshot and starts the graph at its root. A sudden
-target loss can precede the next snapshot boundary, so the last writer may run again. Local
-workspaces must be idle while they are restored.</p>
+target loss can precede the next snapshot boundary, so the last writer may run again. Local workspaces
+must be idle while they are restored.</p>
 <p>Local and Docker targets deduplicate checkpoints in a private Restic repository beside their run
 storage and advertise <code>openengine.workspace-checkpoints/v1</code>. They retain that repository only for a
 failed recovery lineage and delete it after a successful run. Cloud exposes recovery through
 authenticated hosted run routes, so failed-run checkpoints remain available for 30 days after the
-original capsule is removed. Cloud resolves fresh credentials from the admitted connection
-references when it starts the successor.</p>
+original capsule is removed. Cloud resolves declared provider connections from their original
+references. It does not store a raw <code>GH_TOKEN</code>; export it again before resuming a named-target run
+that needs it for private source checkout or Git delivery.</p>
 <h2 id="stop-only-with-explicit-intent">Stop only with explicit intent<a class="headerlink" href="#stop-only-with-explicit-intent" title="Permanent link">&para;</a></h2>
 <p><code>force-stop</code> is the destructive run-lifetime command:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="go">zeroshot force-stop RUN_ID</span>
