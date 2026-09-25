@@ -108,6 +108,17 @@ directions across v1 to v3 (v3: single runs 196.0 against loop first builds 215.
 permutation p = 0.20). The H1 rule is unchanged (5 loop runs, final against build 1). At Sol's
 promotional prices, v3's token use over its first 10 rounds would cost about $170 for 5 runs.
 
+v4 result: **H1 inconclusive**, narrowly. All 5 loop runs were eligible and all gained (+4.2, +2.5,
++8.7, +4.7 and +4.0 points; at least 12 tests each; sign test p = 0.031), but the median gain of 4.2
+points is below the pre-registered 5. No checker ever accepted: every loop ran all 10 rounds. Sol's
+first builds averaged 55.9%, where Luna's loops ended after 50 rounds (55.8%). The mean gain was +3.0
+points after 3 rounds, +4.0 after 5 and +4.8 after 10, about what Luna gained over its first 10
+rounds, but Sol's came early and then flattened. The best run reached 63.6% (300 tests), just below
+the best published result. The loops took 61 to 163 minutes and cost $22 to $64 each ($173 in
+total; a first build cost about $3.75).
+
+![Hidden tests passed per round in sol-xhigh-svgbob-v4: mean of the 5 loop runs with a 95% bootstrap interval, the single-worker level and published results](figures/sol-xhigh-svgbob-v4-pass-rate.png)
+
 ## The graph and prompts
 
 Both arms share one byte-identical `build` node; round 1 of the loop is exactly the single arm.

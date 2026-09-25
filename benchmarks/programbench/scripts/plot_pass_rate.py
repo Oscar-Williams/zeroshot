@@ -76,23 +76,26 @@ def main(data_path: Path) -> Path:
     ax.fill_between(rounds, lo, hi, color=INK, alpha=0.09, lw=0, zorder=2, label="95% bootstrap CI of the mean")
     ax.plot(rounds, mean, color=INK, lw=2.2, marker="o", ms=5.5, mec=CANVAS, mew=1.2, zorder=3, label=f"Mean of {len(passed)} loop runs")
 
+    short = rounds[-1] <= 12  # label every round; long runs get room for the labels at the right end
+    x_lo, x_hi = (0.5, rounds[-1] + 0.5) if short else (0, rounds[-1] * 1.03)
+    span = x_hi - x_lo
     single = rate[:, 0].mean()  # a single worker is the loop's first build
-    lines = [(single, f"Single worker, {single:.1f}%", INK_2, "right")]
+    lines = [(single, f"Single worker, {single:.1f}%", INK_2, "right", False)]
     for ref in data["references"]:
         pct = 100 * ref["passed"] / total
         prefix = "Best published" if ref.get("best") else "Published"
         text = f"{prefix}: {ref['model']}\n({ref['effort']}, {ref['harness']}), {pct:.1f}%"
-        lines.append((pct, text, RUST if ref.get("best") else MUTED, ref.get("label_side", "right")))
-    for y, text, color, side in lines:
+        lines.append((pct, text, RUST if ref.get("best") else MUTED, ref.get("label_side", "right"), ref.get("label_below", False)))
+    for y, text, color, side, below in lines:
         ax.axhline(y, color=color, lw=1.5, ls=(0, (1.2, 2.4)), dash_capstyle="round", zorder=1)
-        x, ha = (rounds[-1] + 1.2, "right") if side == "right" else (0.9, "left")
-        ax.text(x, y + 0.55, text, ha=ha, va="bottom", ma=ha, linespacing=1.25, fontsize=9.5, fontweight="medium", color=color)
+        x, ha = (x_hi - span * 0.3 / 51.5, "right") if side == "right" else (x_lo + span * 0.9 / 51.5, "left")
+        ax.text(x, y - 0.55 if below else y + 0.55, text, ha=ha, va="top" if below else "bottom", ma=ha, linespacing=1.25, fontsize=9.5, fontweight="medium", color=color)
 
     low = min(lo.min(), *(y for y, *_ in lines)) - 4
     high = max(hi.max(), *(y for y, *_ in lines)) + 7  # room for the legend above the highest line
     ax.set_ylim(5 * np.floor(low / 5), 5 * np.ceil(high / 5) - 3)
-    ax.set_xlim(0, rounds[-1] + 1.5)
-    ax.set_xticks(sorted({1, *(r for r in rounds if r % 5 == 0)}))
+    ax.set_xlim(x_lo, x_hi)
+    ax.set_xticks(rounds if short else sorted({1, *(r for r in rounds if r % 5 == 0)}))
     ax.yaxis.set_major_locator(matplotlib.ticker.MultipleLocator(5))
     ax.yaxis.set_major_formatter(matplotlib.ticker.FormatStrFormatter("%d%%"))
     ax.set_xlabel("Build round (one build followed by one independent check)", labelpad=8)
