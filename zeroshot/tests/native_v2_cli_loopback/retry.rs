@@ -1,11 +1,8 @@
-use zeroshot_engine::native_v2_contract::AdmittedRun;
-use std::os::unix::fs::PermissionsExt;
-
 use openengine_cluster_testkit::assertions::AssertValue;
 use super::*;
 use zeroshot_engine::native_v2_claude::{ClaudeAdapter, ClaudeAdapterConfig, ClaudeProcessEnvironment};
 use zeroshot_engine::native_v2_codex::{NativeV2CodexAdapter, NativeV2CodexConfig};
-use zeroshot_engine::native_v2_contract::{ClaudeProvider, CodexProvider};
+use zeroshot_engine::native_v2_contract::{AdmittedRun, ClaudeProvider, CodexProvider};
 
 type ClaimResult = Result<Arc<dyn ExclusiveControllerClaim>, ControllerClaimUnavailable>;
 type AllocationResult = Result<AllocatedCapsule, CapsuleAllocationUnavailable>;
@@ -55,10 +52,8 @@ impl RetryAllocator {
         let executable = root.path(&format!("{}-provider", lane.label()));
         std::fs::create_dir_all(&workspace).assert_value();
         std::fs::create_dir_all(&runtime_home).assert_value();
-        std::fs::write(&executable, lane.script()).assert_value();
-        let mut permissions = std::fs::metadata(&executable).assert_value().permissions();
-        permissions.set_mode(0o700);
-        std::fs::set_permissions(&executable, permissions).assert_value();
+        openengine_cluster_testkit::fixture::write_executable(&executable, lane.script(), 0o700)
+            .assert_value();
         Self {
             lane,
             workspace,
