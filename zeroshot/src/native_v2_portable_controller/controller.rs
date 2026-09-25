@@ -416,11 +416,9 @@ impl CapsuleAllocator for SingleRunAllocator {
 
     async fn allocate(
         &self,
-        run_id: &RunId,
-        _admitted: &AdmittedRun,
-        _github_token: Option<&str>,
+        request: crate::native_v2_cloud::CapsuleAllocationRequest<'_>,
     ) -> Result<AllocatedCapsule, CapsuleAllocationUnavailable> {
-        self.require_run(run_id)?;
+        self.require_run(request.run_id)?;
         let runtime = self
             .runtime
             .lock()

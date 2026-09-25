@@ -529,9 +529,13 @@ async fn permanent_storage_failure_preserves_status_and_reports_stream_completen
                 .all(|event| !matches!(event.status, RunStatus::Finished { .. }))
         );
         let logs = drain(logs, close).await;
-        assert_eq!(logs.len(), 1);
-        assert_eq!(logs.assert_at(0).cursor, harness.before.at_cursor);
-        assert_eq!(logs.assert_at(0).record.message.as_str(), RETAINED_OUTPUT);
+        assert_eq!(logs.len(), 2);
+        assert_eq!(
+            logs.assert_at(0).record.message.as_str(),
+            "Preparing execution environment"
+        );
+        assert_eq!(logs.assert_at(1).cursor, harness.before.at_cursor);
+        assert_eq!(logs.assert_at(1).record.message.as_str(), RETAINED_OUTPUT);
         harness.assert_storage_diagnostic();
         if lose_reads {
             harness.assert_history_unavailable().await;

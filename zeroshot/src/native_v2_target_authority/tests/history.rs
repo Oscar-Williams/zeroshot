@@ -1,3 +1,4 @@
+use openengine_cluster_protocol::{CodexProvider, RunSize, RuntimePlan};
 use super::*;
 use openengine_cluster_protocol::{
     NodeName, NodeRuntimeBinding, PositiveInteger, Sha256Digest, TerminalResult,
@@ -111,6 +112,7 @@ impl HistoryServer {
             .assert_value();
         submission.initial_input = json!({"task":"Inspect native history"});
         submission.runtime = RuntimePlan::Codex {
+            environment: None,
             provider: CodexProvider::OpenAi,
             size: RunSize::Small,
             nodes: BTreeMap::from([(

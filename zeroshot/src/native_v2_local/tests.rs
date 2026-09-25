@@ -218,3 +218,21 @@ fn parses_canonical_github_remote_forms() {
     assert!(github_repository("https://example.com/open-engine/zeroshot.git").is_none());
     assert!(github_repository("https://github.com/extra/open-engine/zeroshot").is_none());
 }
+
+#[test]
+fn local_preparation_rejects_target_hooks_before_resolving_source_or_installing_anything() {
+    for field in ["setup", "startup"] {
+        let mut request = local_request(RunId::new("target-only-hooks"));
+        let mut runtime = serde_json::to_value(&request.intent.runtime).assert_value();
+        runtime["environment"] = json!({field: "touch must-not-run"});
+        request.intent.runtime = serde_json::from_value(runtime).assert_value();
+        assert!(matches!(
+            prepare_local_run(
+                request,
+                Path::new("/nonexistent"),
+                Path::new("/nonexistent")
+            ),
+            Err(LocalCompositionError::PreparationRequiresTarget)
+        ));
+    }
+}

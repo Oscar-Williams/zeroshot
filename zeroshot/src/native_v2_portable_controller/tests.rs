@@ -19,8 +19,7 @@ use super::controller::PortableCheckpointCleanup;
 use crate::native_v2_candidate::test_support::{full_graph, success_node};
 use crate::native_v2_cloud::CapsuleCleanup;
 use crate::native_v2_contract::{
-    CodexProvider, RunSize, RunSubmission, RunTitle, RuntimePlan, SourceBranchId,
-    SourceRepositoryId, SourceRevisionId, ResolvedSource,
+    RunSubmission, RunTitle, SourceBranchId, SourceRepositoryId, SourceRevisionId, ResolvedSource,
 };
 use crate::native_v2_runner::{NodeHandle, NodeRunRequest, NodeRunnerError};
 use crate::native_v2_supervisor::RunRuntimeExit;
@@ -104,11 +103,7 @@ fn submission(key: &str) -> RunSubmission {
         title: RunTitle::new("Portable controller test").assert_value_with("title"),
         graph: full_graph(vec![success_node()]),
         initial_input: Value::Null,
-        runtime: RuntimePlan::Codex {
-            provider: CodexProvider::OpenAi,
-            size: RunSize::Small,
-            nodes: BTreeMap::new(),
-        },
+        runtime: crate::native_v2_candidate::test_support::codex_runtime(BTreeMap::new()),
         source: ResolvedSource {
             repository: SourceRepositoryId::new("open-engine/zeroshot")
                 .assert_value_with("repository"),

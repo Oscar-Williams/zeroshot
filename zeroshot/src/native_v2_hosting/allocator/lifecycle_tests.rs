@@ -432,6 +432,7 @@ fn hosted_copilot_harness_and_invalid_filesystem_layout_preserve_capsule_boundar
     let mut admitted = crate::native_v2_runner::test_support::admitted();
     let nodes = admitted.runtime.nodes().clone();
     admitted.runtime = RuntimePlan::Copilot {
+        environment: None,
         provider: crate::native_v2_contract::CopilotProvider::Github,
         size: crate::native_v2_contract::RunSize::Medium,
         nodes,
@@ -451,7 +452,15 @@ fn hosted_copilot_harness_and_invalid_filesystem_layout_preserve_capsule_boundar
     assert_eq!(config.executable, PathBuf::from("/usr/bin/false"));
     assert_eq!(config.workspace, filesystem.workspace);
     assert_eq!(config.runtime_home, filesystem.runtime_home);
-    assert!(config.base_environment.is_empty());
+    assert_eq!(
+        config.base_environment.get("ZEROSHOT_TOOLS"),
+        Some(&root.child("tools").to_string_lossy().into_owned())
+    );
+    assert!(
+        config
+            .search_path
+            .starts_with(&format!("{}:", root.child("tools/bin").display()))
+    );
     assert!(config.local_command_environment.is_empty());
 
     assert!(production_filesystem(root.path(), root.path(), process_pool).is_err());

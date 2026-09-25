@@ -12,7 +12,7 @@ use crate::native_v2_capsule::provider_process::{
 use crate::native_v2_contract::{NodeInvocation, NodeRuntimeBinding};
 use crate::native_v2_runner::{
     AgentResponse, AgentResponseState, DriverControl, DriverInvocation, NodeDriver,
-    NodeRunnerError, NodeSession, ResolvedEnvironment, SessionFactory, VerifierWorkspace,
+    NodeRunnerError, NodeSession, ResolvedEnvironment, SessionFactory,
 };
 
 use super::{ClaudeAdapter, ClaudeAttempt, ClaudeTurn, ClaudeTurnAdvance, prompt};
@@ -81,7 +81,6 @@ impl NodeDriver for ClaudeAdapter {
         let mut state = ClaudeRunState::new(
             &invocation,
             session,
-            self.runners.verifier_workspace(),
             provider_redactions(&invocation.environment, &self.local_environment),
         )
         .await?;
@@ -144,10 +143,9 @@ impl ClaudeRunState {
     async fn new(
         invocation: &DriverInvocation,
         session: &ClaudeSession,
-        verifier_workspace: VerifierWorkspace,
         redactions: Vec<String>,
     ) -> Result<Self, NodeRunnerError> {
-        let prompt = prompt(invocation, verifier_workspace)?;
+        let prompt = prompt(invocation)?;
         Ok(Self {
             resume_id: session.resume_id.lock().await.clone(),
             retry: ProviderFailureRetry::new("Claude", prompt.clone(), redactions),

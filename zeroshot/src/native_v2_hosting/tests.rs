@@ -369,6 +369,7 @@ async fn invalid_submission_fails_before_run_allocation() {
         "invalid-before-effects",
     );
     sourceful.runtime = RuntimePlan::Codex {
+        environment: None,
         provider: crate::native_v2_contract::CodexProvider::OpenAi,
         size: RunSize::Small,
         nodes: BTreeMap::new(),
@@ -505,7 +506,9 @@ async fn allocator_uses_one_workspace_then_cleans_without_replacement() {
     );
 
     let capsule = allocator
-        .allocate(&run_id, &admitted, None)
+        .allocate(
+            crate::native_v2_candidate::test_support::allocation_request(&run_id, &admitted, None),
+        )
         .await
         .assert_value_with("allocate capsule");
     assert_eq!(
@@ -518,7 +521,16 @@ async fn allocator_uses_one_workspace_then_cleans_without_replacement() {
     );
     assert!(run_path.join("workspace/.git").is_dir());
     assert!(run_path.join("runtime").is_dir());
-    assert!(allocator.allocate(&run_id, &admitted, None).await.is_err());
+    assert!(
+        allocator
+            .allocate(
+                crate::native_v2_candidate::test_support::allocation_request(
+                    &run_id, &admitted, None
+                )
+            )
+            .await
+            .is_err()
+    );
 
     capsule
         .cleanup
@@ -530,7 +542,16 @@ async fn allocator_uses_one_workspace_then_cleans_without_replacement() {
         .destroy_or_confirm_absent(&run_id, RunRuntimeExit::RuntimeLost)
         .await
         .assert_value_with("confirm absent");
-    assert!(allocator.allocate(&run_id, &admitted, None).await.is_err());
+    assert!(
+        allocator
+            .allocate(
+                crate::native_v2_candidate::test_support::allocation_request(
+                    &run_id, &admitted, None
+                )
+            )
+            .await
+            .is_err()
+    );
 }
 
 #[tokio::test]
@@ -589,7 +610,9 @@ async fn default_claude_environment_owns_private_session_home_until_completion()
     let run_id = RunId::new("run-hosting-claude-environment");
     let run_path = allocator.run_path(&run_id);
     let capsule = allocator
-        .allocate(&run_id, &admitted, None)
+        .allocate(
+            crate::native_v2_candidate::test_support::allocation_request(&run_id, &admitted, None),
+        )
         .await
         .assert_value_with("allocate Claude capsule");
     let node = NodeName::new("work").assert_value_with("node");

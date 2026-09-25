@@ -1,4 +1,4 @@
-//! Exercises hosted permission defaults and verifier private copies.
+//! Exercises hosted permission defaults and the shared run workspace.
 #![cfg(unix)]
 
 use std::{collections::BTreeMap, fs, sync::Arc};
@@ -157,7 +157,7 @@ async fn hosted_case(harness: &str, verifier: bool, policy: &str, native: Option
     );
     assert!(!logs.contains("private-config-sentinel"));
     assert!(!workspace.join("inspection-proof").exists());
-    assert_eq!(workspace.join("model-proof").exists(), !verifier);
+    assert!(workspace.join("model-proof").exists());
     runner.close_run(&RunId::new("permission-test")).await;
 }
 
@@ -170,6 +170,7 @@ fn hosted_runner(
     match harness {
         "codex" => {
             let adapter = Arc::new(NativeV2CodexAdapter::new(NativeV2CodexConfig {
+                base_environment: Default::default(),
                 provider: CodexProvider::OpenAi,
                 executable: fixture.child("harness"),
                 workspace: fixture.child("workspace"),
@@ -218,12 +219,14 @@ async fn admission(harness: &str, verifier: bool, binding: NodeRuntimeBinding) -
     let nodes = BTreeMap::from([(NodeName::new("work").assert_value(), binding)]);
     let runtime = if harness == "codex" {
         RuntimePlan::Codex {
+            environment: None,
             provider: CodexProvider::OpenAi,
             size: RunSize::Medium,
             nodes,
         }
     } else {
         RuntimePlan::Claude {
+            environment: None,
             provider: ClaudeProvider::Anthropic,
             size: RunSize::Medium,
             nodes,

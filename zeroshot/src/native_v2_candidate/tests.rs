@@ -301,10 +301,14 @@ impl CapsuleAllocator for CandidateAllocator {
 
     async fn allocate(
         &self,
-        _run_id: &RunId,
-        admitted: &AdmittedRun,
-        _github_token: Option<&str>,
+        request: crate::native_v2_cloud::CapsuleAllocationRequest<'_>,
     ) -> Result<AllocatedCapsule, CapsuleAllocationUnavailable> {
+        let crate::native_v2_cloud::CapsuleAllocationRequest {
+            run_id: _run_id,
+            admitted,
+            github_token: _github_token,
+            ..
+        } = request;
         let delivery = Arc::new(NativeV2DeliveryAdapter::new(
             NativeV2DeliveryConfig {
                 delivery_run_id: RunId::new("candidate-test"),

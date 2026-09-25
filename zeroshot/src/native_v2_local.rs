@@ -50,6 +50,10 @@ pub enum LocalCompositionError {
     ResolvedSource,
     #[error("local run identity could not be assigned")]
     RunIdentity,
+    #[error(
+        "setup and startup require a Docker target; local runs use the invoking machine environment"
+    )]
+    PreparationRequiresTarget,
     #[error(transparent)]
     RunEnvironment(#[from] RunEnvironmentError),
     #[error("local controller storage could not be prepared")]
@@ -97,6 +101,7 @@ pub fn prepare_local_run(
         source: _,
         profile: _,
     } = request;
+    validate_local_environment(&intent.runtime)?;
     let environment = RunEnvironment::exact(&intent.runtime, connections)?;
     let (workspace, source) = local_resolved_source(current_directory, git_program)?;
     let native_environment = capture_local_native_environment(current_directory)?;
@@ -116,6 +121,17 @@ pub fn prepare_local_run(
         workspace,
         native_environment,
     })
+}
+
+fn validate_local_environment(runtime: &RuntimePlan) -> Result<(), LocalCompositionError> {
+    if runtime.environment().is_some_and(|environment| {
+        environment.setup.is_some()
+            || environment.startup.is_some()
+            || !environment.connections.is_empty()
+    }) {
+        return Err(LocalCompositionError::PreparationRequiresTarget);
+    }
+    Ok(())
 }
 
 pub(crate) fn capture_local_native_environment(
@@ -261,6 +277,7 @@ fn build_local_candidate_config(
     request: LocalProcessCandidateRequest<'_>,
     owner_scoped: bool,
 ) -> Result<NativeNodeRunner, LocalCompositionError> {
+    validate_local_environment(&request.admitted.runtime)?;
     let LocalProcessCandidateRequest {
         admitted,
         delivery_run_id,
@@ -340,6 +357,7 @@ fn local_harness(
             process_pool,
         }),
         RuntimePlan::Codex { provider, .. } => NativeV2HarnessConfig::Codex(NativeV2CodexConfig {
+            base_environment: Default::default(),
             provider: *provider,
             executable: PathBuf::from("codex"),
             workspace: workspace.to_owned(),

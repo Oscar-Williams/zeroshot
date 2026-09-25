@@ -36,7 +36,15 @@ use session::{ClaudeSession, attempt_session_id, observe_session};
 use transcript::{ClaudeAttempt, ClaudeEmission, ClaudeTranscript};
 use turn_process::ClaudeProcessStart;
 
-const MINIMAL_ENVIRONMENT_NAMES: [&str; 6] = ["HOME", "LANG", "LC_ALL", "PATH", "TERM", "TMPDIR"];
+const MINIMAL_ENVIRONMENT_NAMES: [&str; 7] = [
+    "HOME",
+    "LANG",
+    "LC_ALL",
+    "PATH",
+    "TERM",
+    "TMPDIR",
+    "ZEROSHOT_TOOLS",
+];
 
 #[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
 pub enum ClaudeAdapterConfigError {
@@ -70,7 +78,7 @@ impl ClaudeProcessEnvironment {
         Ok(Self(values))
     }
 
-    fn clone_values(&self) -> BTreeMap<String, String> {
+    pub(crate) fn clone_values(&self) -> BTreeMap<String, String> {
         self.0.clone()
     }
 

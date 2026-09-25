@@ -2,6 +2,7 @@ use super::*;
 
 pub(super) fn runtime() -> RuntimePlan {
     RuntimePlan::Codex {
+        environment: None,
         provider: CodexProvider::OpenAi,
         size: RunSize::Small,
         nodes: BTreeMap::from([
@@ -205,6 +206,7 @@ pub(super) fn complex_runtime() -> RuntimePlan {
         connections: DeclaredConnections::empty(),
     };
     RuntimePlan::Codex {
+        environment: None,
         provider: CodexProvider::OpenAi,
         size: RunSize::Small,
         nodes: BTreeMap::from([

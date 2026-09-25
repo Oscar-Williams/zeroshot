@@ -7,6 +7,7 @@
 
 mod allocator;
 mod connections;
+mod environment;
 mod repository;
 mod workspaces;
 

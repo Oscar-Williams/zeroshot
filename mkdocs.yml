@@ -54,6 +54,7 @@ nav:
       - Runtimes and connections: concepts/runtimes-and-connections.md
       - Targets: concepts/targets.md
   - Guides:
+      - Prepare a runtime environment: guides/runtime-environments.md
       - Observe and control runs: guides/observe-and-control.md
       - Use a local graph as an ACP agent: guides/acp.md
       - Python SDK: guides/python-sdk.md

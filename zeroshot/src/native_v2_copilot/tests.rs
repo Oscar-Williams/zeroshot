@@ -70,6 +70,7 @@ async fn admitted(binding: NodeRuntimeBinding, instructions: &str) -> AdmittedRu
         graph,
         initial_input: Value::Null,
         runtime: RuntimePlan::Copilot {
+            environment: None,
             provider: CopilotProvider::Github,
             size: RunSize::Medium,
             nodes: BTreeMap::from([(NodeName::new("work").assert_value(), binding)]),

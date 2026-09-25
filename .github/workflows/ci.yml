@@ -452,6 +452,8 @@ jobs:
             --public-origin http://127.0.0.1:4185 --storage /var/lib/zeroshot/native-v2)"
           trap 'docker logs "$container"; docker rm --force --volumes "$container"' EXIT
           node tests/tooling/smoke-ui.js --url http://127.0.0.1:4185
+          node tests/tooling/smoke-environment.js --url http://127.0.0.1:4185 \
+            --revision "$(git rev-parse HEAD)" --container "$container"
           docker stop --time 20 "$container"
           test "$(docker inspect --format '{{.State.ExitCode}}' "$container")" = 0
           docker start "$container"

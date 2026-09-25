@@ -85,8 +85,8 @@ pub(crate) fn write_new_file(path: &Path, bytes: &[u8], unix_mode: u32) -> std::
 
 /// Linux identity allocation for one contained provider process domain.
 ///
-/// Writers share the workspace owner UID and use session-specific supplementary groups for
-/// process cleanup. Verifiers retain distinct UIDs. A production host reserves disjoint UID and
+/// Agents share the workspace owner UID and use session-specific supplementary groups for
+/// process cleanup. Environment services and delivery have their own markers. A host reserves UID and
 /// supplementary-group ranges for each active run.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct HostedProcessPool {
@@ -102,6 +102,8 @@ pub struct HostedProcessPool {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum HostedProcessScope {
     Writer,
+    Environment,
+    Delivery,
     WriterNodeInstance(u64),
     WriterExecution(u64),
     VerifierNodeInstance(u64),
@@ -113,6 +115,8 @@ impl HostedProcessScope {
     pub fn private_home(self, root: &Path) -> PathBuf {
         let leaf = match self {
             Self::Writer => "writer".to_owned(),
+            Self::Environment => "environment".to_owned(),
+            Self::Delivery => "delivery".to_owned(),
             Self::WriterNodeInstance(identity) => format!("writer-node-instance-{identity}"),
             Self::WriterExecution(identity) => format!("writer-execution-{identity}"),
             Self::VerifierNodeInstance(identity) => {
@@ -125,7 +129,7 @@ impl HostedProcessScope {
 
     fn session_identity(self) -> Option<(u64, u32)> {
         match self {
-            Self::Writer => None,
+            Self::Writer | Self::Environment | Self::Delivery => None,
             Self::WriterNodeInstance(identity) => Some((identity, 2)),
             Self::WriterExecution(identity) => Some((identity, 3)),
             Self::VerifierNodeInstance(identity) => Some((identity, 0)),
@@ -135,7 +139,7 @@ impl HostedProcessScope {
 
     fn validate(self) -> Result<(), ProcessRunnerError> {
         let identity = match self {
-            Self::Writer => None,
+            Self::Writer | Self::Environment | Self::Delivery => None,
             Self::WriterNodeInstance(identity)
             | Self::WriterExecution(identity)
             | Self::VerifierNodeInstance(identity)
@@ -255,8 +259,8 @@ impl HostedProcessPool {
     /// Derives one disjoint active-run pool from this host pool.
     ///
     /// The host pool's writer identity remains reserved for serialized source resolution. Active
-    /// runs start at its session base and reserve one workspace owner plus both writer group and
-    /// verifier UID session variants for every admitted execution identity.
+    /// runs reserve one workspace owner, environment and delivery markers, and distinct
+    /// session markers for every admitted execution identity.
     pub(crate) fn active_run_slot(
         self,
         slot: u32,
@@ -264,11 +268,11 @@ impl HostedProcessPool {
     ) -> Result<Self, ProcessRunnerError> {
         let width = maximum_identity
             .checked_mul(4)
-            .and_then(|value| value.checked_add(1))
+            .and_then(|value| value.checked_add(3))
             .ok_or_else(identity_range_exhausted)?;
         let session_span = maximum_identity
             .checked_mul(4)
-            .and_then(|value| value.checked_sub(1))
+            .and_then(|value| value.checked_add(1))
             .and_then(|value| u32::try_from(value).ok())
             .ok_or_else(identity_range_exhausted)?;
         let offset = u64::from(slot)
@@ -300,38 +304,8 @@ impl HostedProcessPool {
         scope: HostedProcessScope,
     ) -> Result<HostedProcessIdentity, ProcessRunnerError> {
         scope.validate()?;
-        let (uid, gid, group) = match scope.session_identity() {
-            None => (self.writer_uid, self.writer_gid, None),
-            Some((identity, discriminator)) => {
-                let index = identity.checked_sub(1).ok_or_else(|| {
-                    ProcessRunnerError::InvalidCommand(
-                        "provider process identity must be greater than zero".to_owned(),
-                    )
-                })?;
-                let offset = index
-                    .checked_mul(4)
-                    .and_then(|value| value.checked_add(u64::from(discriminator)))
-                    .and_then(|value| u32::try_from(value).ok())
-                    .ok_or_else(|| {
-                        ProcessRunnerError::InvalidCommand(
-                            "provider identity range is exhausted".to_owned(),
-                        )
-                    })?;
-                let identity = self
-                    .session_identity_base
-                    .checked_add(offset)
-                    .ok_or_else(|| {
-                        ProcessRunnerError::InvalidCommand(
-                            "provider identity range is exhausted".to_owned(),
-                        )
-                    })?;
-                if discriminator >= 2 {
-                    (self.writer_uid, self.writer_gid, Some(identity))
-                } else {
-                    (identity, self.verifier_gid, None)
-                }
-            }
-        };
+        let (uid, gid) = (self.writer_uid, self.writer_gid);
+        let group = self.cleanup_marker(scope)?;
         let runner = LocalProcessRunner::hosted_identity(uid, gid, group)?;
         Ok(HostedProcessIdentity {
             runner,
@@ -339,6 +313,29 @@ impl HostedProcessPool {
             gid,
             scope,
         })
+    }
+
+    fn cleanup_marker(self, scope: HostedProcessScope) -> Result<Option<u32>, ProcessRunnerError> {
+        let offset = match scope {
+            HostedProcessScope::Writer => return Ok(None),
+            HostedProcessScope::Environment => 0,
+            HostedProcessScope::Delivery => 1,
+            scope => {
+                let (identity, discriminator) = scope
+                    .session_identity()
+                    .ok_or_else(identity_range_exhausted)?;
+                identity
+                    .checked_sub(1)
+                    .and_then(|index| index.checked_mul(4))
+                    .and_then(|index| index.checked_add(u64::from(discriminator) + 2))
+                    .and_then(|index| u32::try_from(index).ok())
+                    .ok_or_else(identity_range_exhausted)?
+            }
+        };
+        self.session_identity_base
+            .checked_add(offset)
+            .map(Some)
+            .ok_or_else(identity_range_exhausted)
     }
 }
 

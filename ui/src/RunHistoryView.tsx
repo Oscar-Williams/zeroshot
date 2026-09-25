@@ -101,7 +101,10 @@ export function RunHistoryView({
       setFocus(undefined);
       setPositions({});
     },
-    onOpen: (detail) => setSelected(detail.graph.root.name),
+    onOpen: (detail) => {
+      setSelected(detail.graph.root.name);
+      setInspector(detail.phase === 'admitted' || !!environmentFailure(detail));
+    },
     onMissing: () => setPlaying(false),
   });
   const document: Document | undefined = useMemo(
@@ -210,15 +213,20 @@ export function RunHistoryView({
   const nodeControls = projection?.controls.filter((visit) => visit.node === node?.name) ?? [];
   const showExecutions =
     node && (['step', 'verifier'].includes(node.kind) || node.name === document?.graph.root.name);
+  const preparing =
+    run?.phase === 'admitted' &&
+    !events.some(({ event }) => event.kind === 'run_started' || event.kind === 'node_started');
   const currentState =
     projection?.terminal?.status ??
     (loadedHead && run?.runtimeFailure
       ? 'failed'
-      : safePosition === 0
-        ? 'Before run'
-        : loadedHead && run?.phase === 'finished'
-          ? 'Recorded history'
-          : 'In progress');
+      : loadedHead && preparing
+        ? 'Preparing environment'
+        : safePosition === 0
+          ? 'Before run'
+          : loadedHead && run?.phase === 'finished'
+            ? 'Recorded history'
+            : 'In progress');
   const shownStatus = safePosition === moments.length - 1 && loadedHead ? currentState : 'Replay';
 
   return (
@@ -239,6 +247,8 @@ export function RunHistoryView({
             run={run}
             error={error}
             loading={loading}
+            preparing={preparing}
+            openLog={() => inspect(document.graph.root.name)}
             retry={() => void loadHistory(run.runId, source, false)}
           />
           <div className={`editor-body history-body ${inspector ? '' : 'inspector-closed'}`}>
@@ -330,19 +340,63 @@ export function RunHistoryView({
   );
 }
 
+function environmentFailure(run: RunDetail): string | undefined {
+  if (run.terminal?.status !== 'failed') return undefined;
+  switch (run.terminal.reason) {
+    case 'environment_setup_failed':
+      return 'Environment setup failed.';
+    case 'environment_startup_failed':
+      return 'Environment startup failed.';
+    case 'environment_preparation_timeout':
+      return 'Environment preparation timed out.';
+    default:
+      return undefined;
+  }
+}
+
+function EnvironmentNotice({
+  run,
+  preparing,
+  openLog,
+}: {
+  run: RunDetail;
+  preparing: boolean;
+  openLog: () => void;
+}) {
+  const failure = environmentFailure(run);
+  if (!preparing && !failure) return null;
+  return (
+    <div className="history-error" role={failure ? 'alert' : 'status'}>
+      <span>
+        {failure
+          ? `${failure} Graph execution did not start. Check the run log and update the profile before retrying.`
+          : 'Preparing environment. Setup and startup must finish before graph nodes can run.'}
+      </span>
+      <button className="text-button" onClick={openLog}>
+        Open run log
+      </button>
+    </div>
+  );
+}
+
 function RunHistoryAlerts({
   run,
   error,
   loading,
+  preparing,
+  openLog,
   retry,
 }: {
   run: RunDetail;
   error: string;
   loading: boolean;
+  preparing: boolean;
+  openLog: () => void;
   retry: () => void;
 }) {
   return (
     <>
+      <EnvironmentNotice run={run} preparing={preparing} openLog={openLog} />
       {run.observation && !['active', 'complete'].includes(run.observation.state) && (
         <div className="history-error" role="status" data-problem-code={run.observation.code}>
           <span>

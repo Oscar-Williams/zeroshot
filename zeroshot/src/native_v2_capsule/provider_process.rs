@@ -16,7 +16,6 @@ use crate::execution::process::{
 use crate::native_v2_contract::NodeRuntimeBinding;
 use crate::native_v2_runner::{
     DriverControl, DriverInvocation, LiveOutput, LiveOutputStream, NodeRole, NodeRunnerError,
-    VerifierWorkspace,
 };
 use crate::worker_catalog::ReasoningEffort;
 
@@ -66,13 +65,6 @@ impl ProviderProcessRunners {
 
     pub(crate) const fn local() -> Self {
         Self::Local
-    }
-
-    pub(crate) const fn verifier_workspace(self) -> VerifierWorkspace {
-        match self {
-            Self::Hosted(_) => VerifierWorkspace::Isolated,
-            Self::Local => VerifierWorkspace::Shared,
-        }
     }
 
     pub(crate) const fn is_hosted(self) -> bool {

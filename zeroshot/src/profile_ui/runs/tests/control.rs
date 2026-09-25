@@ -20,6 +20,7 @@ async fn software_fixture() -> Fixture {
         .materialize(TemplateDelivery::None)
         .assert_value();
     let runtime = crate::native_v2_contract::RuntimePlan::Codex {
+        environment: None,
         provider: crate::native_v2_contract::CodexProvider::OpenAi,
         size: RunSize::Small,
         nodes: ["worker", "acceptance", "code", "review_repair"]

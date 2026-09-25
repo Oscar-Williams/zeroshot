@@ -148,7 +148,6 @@ impl CopilotAdapter {
             invocation,
             control,
             rpc::CopilotRpcNative {
-                verifier_workspace: self.runners.verifier_workspace(),
                 authentication,
                 provider: local_provider.as_ref(),
                 redactions: self

@@ -43,11 +43,13 @@ pub(super) fn runtime(kind: RuntimePlanKind) -> RuntimePlan {
     ]);
     match kind {
         RuntimePlanKind::Codex => RuntimePlan::Codex {
+            environment: None,
             provider: CodexProvider::OpenAi,
             size: RunSize::Medium,
             nodes,
         },
         RuntimePlanKind::Claude => RuntimePlan::Claude {
+            environment: None,
             provider: crate::native_v2_contract::ClaudeProvider::Anthropic,
             size: RunSize::Medium,
             nodes,
@@ -163,6 +165,7 @@ pub(super) fn candidate_config(
     let pool = HostedProcessPool::new(10_002, 10_002, 20_000, 20_000).assert_value_with("pool");
     let harness = match kind {
         RuntimePlanKind::Codex => NativeV2HarnessConfig::Codex(NativeV2CodexConfig {
+            base_environment: Default::default(),
             provider: CodexProvider::OpenAi,
             executable: PathBuf::from("/usr/bin/false"),
             workspace: repository.workspace.clone(),

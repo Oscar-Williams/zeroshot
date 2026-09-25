@@ -8,6 +8,7 @@ fn local_configuration(
     native_environment: BTreeMap<String, String>,
 ) -> NativeV2CodexConfig {
     NativeV2CodexConfig {
+        base_environment: Default::default(),
         provider,
         executable: PathBuf::from("codex"),
         workspace: PathBuf::from("/workspace"),

@@ -60,7 +60,7 @@ pub(in crate::native_v2_cli) enum Call {
     },
     ProfileSet {
         target: Option<String>,
-        request: RunProfileSetRequest,
+        request: Box<RunProfileSetRequest>,
     },
     ProfileDelete {
         target: Option<String>,
@@ -539,7 +539,7 @@ impl NativeV2CliBackend for FakeBackend {
     ) -> Result<RunProfileMutationResult, NativeV2CliError> {
         self.calls.lock().assert_value().push(Call::ProfileSet {
             target: target.map(str::to_owned),
-            request: request.clone(),
+            request: Box::new(request.clone()),
         });
         Ok(RunProfileMutationResult {
             profile: RunProfile {

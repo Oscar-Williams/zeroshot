@@ -131,6 +131,7 @@ pub(super) fn runtime(environment: BTreeSet<EnvironmentVariableName>) -> Runtime
         .assert_value_with("declared connection")
     };
     RuntimePlan::Codex {
+        environment: None,
         provider: CodexProvider::OpenAi,
         size: RunSize::Small,
         nodes: BTreeMap::from([(
@@ -147,6 +148,7 @@ pub(super) fn runtime(environment: BTreeSet<EnvironmentVariableName>) -> Runtime
 
 pub(super) fn claude_runtime() -> RuntimePlan {
     RuntimePlan::Claude {
+        environment: None,
         provider: ClaudeProvider::Anthropic,
         size: RunSize::Small,
         nodes: BTreeMap::from([(

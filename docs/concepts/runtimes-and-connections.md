@@ -120,3 +120,7 @@ preserves that path. For OpenRouter, use `https://openrouter.ai/api/v1` with Cod
 `https://openrouter.ai/api` with Claude. Base URLs must use HTTP(S) and cannot contain embedded
 credentials, query parameters, or fragments. Both fields remain connection values, outside runtime
 JSON and run history. Exact plans declare these fields under any chosen connection key.
+
+Docker runtimes can prepare shared tools, project dependencies, and services with setup and
+startup hooks. See [Prepare a runtime environment](../guides/runtime-environments.md) for the
+installation conventions, resume behavior, and direct-target ownership boundary.

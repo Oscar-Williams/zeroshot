@@ -75,9 +75,10 @@ create temporary files and generated artifacts, and must report failed or unavai
 The built-in acceptance verifier also tries to run the repository's pre-commit checks and reports
 the results.
 
-Local verifiers operate directly on the candidate: the restriction on edits is instruction guidance,
-not a filesystem boundary. Hosted verifiers retain disposable writable copies; their process and
-filesystem isolation remains in force.
+Local and hosted verifiers operate directly on the candidate: the restriction on edits is instruction
+guidance, not a filesystem boundary. Hosted nodes share the prepared workspace and its owner identity.
+They retain separate session homes and process cleanup markers, so ending one node does not terminate
+another node or the run's startup services.
 
 Zeroshot controls the response format and session continuation. Web search follows Codex's
 configuration: by default it uses live search with full access and cached search otherwise. For local

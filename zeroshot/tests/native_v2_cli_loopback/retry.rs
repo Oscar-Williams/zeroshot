@@ -1,3 +1,4 @@
+use zeroshot_engine::native_v2_contract::AdmittedRun;
 use std::os::unix::fs::PermissionsExt;
 
 use openengine_cluster_testkit::assertions::AssertValue;
@@ -80,10 +81,14 @@ impl CapsuleAllocator for RetryAllocator {
 
     async fn allocate(
         &self,
-        _run_id: &RunId,
-        admitted: &AdmittedRun,
-        _github_token: Option<&str>,
+        request: zeroshot_engine::native_v2_cloud::CapsuleAllocationRequest<'_>,
     ) -> AllocationResult {
+        let zeroshot_engine::native_v2_cloud::CapsuleAllocationRequest {
+            run_id: _run_id,
+            admitted,
+            github_token: _github_token,
+            ..
+        } = request;
         let runner = match self.lane {
             RetryLane::Codex => self.codex_runner(admitted)?,
             RetryLane::Claude => self.claude_runner(admitted)?,
@@ -113,6 +118,7 @@ impl RetryAllocator {
     ) -> Result<Arc<dyn zeroshot_engine::native_v2_runner::NodeRunner>, CapsuleAllocationUnavailable>
     {
         let adapter = Arc::new(NativeV2CodexAdapter::new_local(NativeV2CodexConfig {
+            base_environment: Default::default(),
             provider: CodexProvider::OpenAi,
             executable: self.executable.clone(),
             workspace: self.workspace.clone(),

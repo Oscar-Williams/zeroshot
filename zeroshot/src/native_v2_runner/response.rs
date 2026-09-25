@@ -10,7 +10,6 @@ use super::{DriverControl, LiveOutput, LiveOutputStream, NodeRunnerError};
 
 #[path = "response/guidance.rs"]
 mod guidance;
-pub(crate) use guidance::VerifierWorkspace;
 
 const MAX_RESPONSE_ERROR_BYTES: usize = 8 * 1024;
 const MAX_OUTPUT_CORRECTIONS: usize = 2;
@@ -445,22 +444,13 @@ fn closed_object_schema(properties: BTreeMap<String, Value>, required: Vec<Strin
     })
 }
 
-/// Renders a provider-neutral node turn contract with isolated verifier guidance.
+/// Renders a provider-neutral node turn contract for the shared workspace.
 pub fn render_agent_prompt(
     instructions: &NodeInstructions,
     input: &Value,
     response: &NodeResponseContract,
 ) -> Result<String, NodeRunnerError> {
-    render_agent_prompt_for(instructions, input, response, VerifierWorkspace::Isolated)
-}
-
-pub(crate) fn render_agent_prompt_for(
-    instructions: &NodeInstructions,
-    input: &Value,
-    response: &NodeResponseContract,
-    verifier_workspace: VerifierWorkspace,
-) -> Result<String, NodeRunnerError> {
-    let runtime_guidance = guidance::runtime_guidance(response, verifier_workspace);
+    let runtime_guidance = guidance::runtime_guidance(response);
     let instructions = instructions.as_str();
     let input = serde_json::to_string(input).map_err(|_| NodeRunnerError::Driver)?;
     let response = serde_json::to_string(response).map_err(|_| NodeRunnerError::Driver)?;

@@ -20,16 +20,22 @@ pub enum RuntimePlan {
         provider: CopilotProvider,
         size: RunSize,
         nodes: BTreeMap<NodeName, NodeRuntimeBinding>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        environment: Option<super::RuntimeEnvironment>,
     },
     Codex {
         provider: CodexProvider,
         size: RunSize,
         nodes: BTreeMap<NodeName, NodeRuntimeBinding>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        environment: Option<super::RuntimeEnvironment>,
     },
     Claude {
         provider: ClaudeProvider,
         size: RunSize,
         nodes: BTreeMap<NodeName, NodeRuntimeBinding>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        environment: Option<super::RuntimeEnvironment>,
     },
 }
 
@@ -52,6 +58,15 @@ impl RuntimePlan {
         }
     }
 
+    #[must_use]
+    pub const fn environment(&self) -> Option<&super::RuntimeEnvironment> {
+        match self {
+            Self::Copilot { environment, .. }
+            | Self::Codex { environment, .. }
+            | Self::Claude { environment, .. } => environment.as_ref(),
+        }
+    }
+
     /// Union of the fields required from each connection key across all executable nodes.
     #[must_use]
     pub fn connection_requirements(
@@ -60,6 +75,14 @@ impl RuntimePlan {
         let mut requirements = BTreeMap::<ConnectionKey, BTreeSet<EnvironmentVariableName>>::new();
         for binding in self.nodes().values() {
             for (key, fields) in binding.declared_connections().iter() {
+                requirements
+                    .entry(key.clone())
+                    .or_default()
+                    .extend(fields.iter().cloned());
+            }
+        }
+        if let Some(environment) = self.environment() {
+            for (key, fields) in environment.connections.iter() {
                 requirements
                     .entry(key.clone())
                     .or_default()

@@ -44,7 +44,6 @@ async fn admitted_with_delivery() -> AdmittedRun {
             "input":{"kind":"null"},"output":{"kind":"null"},
             "inputBindings":[],"writeBindings":[],"timeoutMs":1000,"attempts":1
         }),
-        git_delivery_node(),
         json!({
             "kind":"verifier","name":"verify","worker":"agent.verify@1",
             "instructions":"Verify the completed delivery.",
@@ -52,9 +51,11 @@ async fn admitted_with_delivery() -> AdmittedRun {
             "inputBindings":[],"writeBindings":[],"timeoutMs":1000,"attempts":1,
             "signals":{"verdict":["accepted"]},"diagnostic":{"kind":"null"}
         }),
+        git_delivery_node(),
         success_node(),
     ]);
     let runtime = RuntimePlan::Codex {
+        environment: None,
         provider: CodexProvider::OpenAi,
         size: RunSize::Medium,
         nodes: BTreeMap::from([
@@ -92,6 +93,7 @@ async fn admitted_without_delivery() -> AdmittedRun {
             graph: full_graph(vec![success_node()]),
             initial_input: Value::Null,
             runtime: RuntimePlan::Codex {
+                environment: None,
                 provider: CodexProvider::OpenAi,
                 size: RunSize::Medium,
                 nodes: BTreeMap::new(),
@@ -196,7 +198,26 @@ async fn required_success_needs_exact_terminal_receipt_from_last_completed_write
     let accepted = TerminalResult::Succeeded {
         output: json!({"delivery": receipt.clone()}),
     };
-    let delivery_then_read_only_verifier = snapshot(
+    let reviewed_delivery = snapshot(
+        &admitted,
+        [
+            ("worker", worker_outcome()),
+            ("verify", verifier_outcome()),
+            ("deliver", delivery_outcome(receipt.clone())),
+        ],
+    );
+    assert_eq!(
+        enforce_delivery_terminal(
+            DeliveryPolicy::Required,
+            &admitted,
+            &reviewed_delivery,
+            accepted.clone(),
+        )
+        .assert_value(),
+        accepted
+    );
+
+    let reviewer_after_delivery = snapshot(
         &admitted,
         [
             ("worker", worker_outcome()),
@@ -208,11 +229,11 @@ async fn required_success_needs_exact_terminal_receipt_from_last_completed_write
         enforce_delivery_terminal(
             DeliveryPolicy::Required,
             &admitted,
-            &delivery_then_read_only_verifier,
+            &reviewer_after_delivery,
             accepted.clone(),
         )
         .assert_value(),
-        accepted
+        delivery_unconfirmed()
     );
 
     let missing_inline_receipt = TerminalResult::Succeeded {
@@ -222,7 +243,7 @@ async fn required_success_needs_exact_terminal_receipt_from_last_completed_write
         enforce_delivery_terminal(
             DeliveryPolicy::Required,
             &admitted,
-            &delivery_then_read_only_verifier,
+            &reviewed_delivery,
             missing_inline_receipt,
         )
         .assert_value(),
@@ -270,8 +291,8 @@ async fn optional_policy_still_requires_a_receipt_when_delivery_is_present() {
         &admitted,
         [
             ("worker", worker_outcome()),
-            ("deliver", delivery_outcome(receipt.clone())),
             ("verify", verifier_outcome()),
+            ("deliver", delivery_outcome(receipt.clone())),
         ],
     );
     let accepted = TerminalResult::Succeeded {

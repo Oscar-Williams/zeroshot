@@ -32,6 +32,7 @@ fn admitted_run() -> AdmittedRun {
         graph,
         initial_input: Value::Null,
         runtime: RuntimePlan::Codex {
+            environment: None,
             provider: CodexProvider::OpenAi,
             size: RunSize::Medium,
             nodes: Default::default(),

@@ -99,13 +99,11 @@ with `npm i -g @the-open-engine-company/zeroshot` or build `zeroshot` with Cargo
   model prompt, suppress Claude hooks/auth helpers, and require confirmed process cleanup before the
   model turn. They do not rewrite settings files; normal native startup state may still be updated.
   Verifier nodes use the same permission handling as workers across all harnesses. The shared prompt
-  renderer tells workers to use repository-declared setup in the checkout, await terminal command
-  status, and keep standalone executable tools out of `/tmp`. Hosted verifiers receive private copies
-  and may perform repository setup there. Local verifiers share the candidate and may run concurrently,
-  so their prompt prohibits setup or dependency installs that rewrite it. Verifiers may run checks and
-  create artifacts but cannot edit reviewed material or make repairs. A missing declared dependency
-  requires setup and retry in a private copy, but rejects from a shared checkout rather than becoming
-  an unavailable check. This local review boundary is instructional, not filesystem enforcement.
+  renderer tells workers to use repository-declared setup, await terminal command status, and keep
+  standalone executable tools in the run's `ZEROSHOT_TOOLS/bin` when provided. All workers and
+  verifiers share the prepared workspace and can write files. Review instructions prohibit repairs
+  and warn that other nodes may execute concurrently; this is an instructional boundary. Missing
+  dependencies are reported with environment evidence rather than unrelated code repair requests.
   Shared inspection owns bounded JSONL exchange and process cleanup. Each harness owns its native
   policy parser and `apply_permission_default` entry point; `PermissionPolicy` distinguishes unset,
   configured, and unavailable inspection results. Codex browser/computer access controls and explicit
@@ -252,7 +250,7 @@ with `npm i -g @the-open-engine-company/zeroshot` or build `zeroshot` with Cargo
 - Hosted delivery Git runs as the pinned workspace writer UID/GID, matching source checkout, so
   fetched objects, commits, merges, and partial failures remain writable by subsequent repairs.
   Admission excludes overlapping writers and requires their process cleanup before delivery;
-  concurrent hosted verifiers retain distinct identities. Delivery confirms UID-wide helper cleanup
+  all agents share the workspace identity. Delivery confirms its own supplementary-group helper cleanup
   before success, repair, error, cancellation, or panic can release that identity; unconfirmed cleanup
   is fatal. A caught delivery panic settles as a node crash after confirmed cleanup, without exposing
   its payload. Allocation requires an idle writer domain before authenticated checkout and rechecks
@@ -359,23 +357,34 @@ with `npm i -g @the-open-engine-company/zeroshot` or build `zeroshot` with Cargo
 - Native-v2 admits concurrent writers in parallel branches and map items. Writers share the run's
   workspace owner identity; hosted session cleanup tracks an immutable supplementary group marker
   per session. Authored graphs coordinate overlapping edits. Admission rejects Git delivery that
-  can overlap another writer or delivery; delivery may run alongside verifiers, which are instructed
-  not to edit the candidate.
+  can overlap another agent or delivery, including verifiers. Every executable node participates
+  in workspace checkpoint and final delivery accounting.
   A delivery receipt certifies success only if every other writer settled before delivery started.
   Unconfirmed process cleanup is a fatal runtime failure, including after cancellation; it cannot
   be reduced to a retryable node crash or an authored parallel-join void.
   Retained workspace handoff commits when the source workspace moves to its successor. A later
   allocation failure preserves that successor for recovery; unconfirmed cleanup keeps its durable
   run nonterminal until replacement-controller reconciliation confirms cleanup.
-- Hosted verifiers build in disposable writable copies of the current candidate. Copies include
-  dirty files and build artifacts, preserve metadata, and use reflinks or independent file copies.
-  Hosted candidate workspace roots are writer-owned `0700`; workers cannot traverse another run's
-  candidate, and the supervisor-owned production ledger and existing SQLite sidecars are `0600`.
-  Source traversal pins descriptors without following symlinks so concurrent renames cannot escape
-  the candidate; copying alongside writers does not provide an atomic snapshot. Verifier writes
-  are never promoted to the candidate or peers. Provider scratch permits execution.
-  Managed copies and execution-scoped homes are removed only after confirmed process-tree cleanup;
-  node-instance homes survive authorized continuation and loop revisits until session closure.
+- Workers and verifiers use one canonical workspace, including ignored dependencies, build outputs
+  and services. Provider session homes and scratch directories remain separate; individual process
+  cleanup uses session group markers so it cannot terminate a peer or a startup service. Workspace
+  roots are run-owner `0700`, runtime roots supervisor-owned `0711`, and production ledgers `0600`.
+  Session homes disappear only after confirmed cleanup; node-instance homes survive loop revisits.
+- An optional `runtime.environment` carries public setup/startup scripts, nonsecret variables, and
+  explicit hook connection references. Hosted preparation is accepted asynchronously and owns its
+  controller lease before allocation. Setup runs as root before checkout or checkpoint restore;
+  startup runs as the workspace owner in the restored checkout before graph dispatch. Both rerun
+  on each resume attempt. Hooks have fifteen-minute limits within one thirty-minute preparation
+  budget, emit bounded redacted run logs, and fail before agent retries. Force-stop signals
+  preparation before waiting for cleanup; failed cleanup retains authority for replay/recovery.
+  `ZEROSHOT_TOOLS/bin` precedes the base PATH for hooks and all agents; shell exports do not persist.
+  Startup services retain a separate run-owned process marker and stop at run cleanup. Checkpoints
+  retain files and graph state, not services, Docker state, or conversations; users reconstruct
+  services idempotently and keep live database state outside file checkpoint guarantees.
+  Local runs reject hooks and use the invoking environment. Direct Docker setup modifies its
+  operator-owned target container, shared by that target's runs; separate target containers are
+  needed for independent OS dependency sets. Cloud supplies its own disposable execution placement.
+  Image-owned harness wrappers pin their Node interpreter independently of the project PATH.
 
 - Native local CLI and in-process execution support Unix and Windows. Shared OS facilities live in
   `execution::platform`; local controller transport selects Unix sockets or private Windows named

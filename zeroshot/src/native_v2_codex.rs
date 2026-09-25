@@ -29,7 +29,7 @@ use crate::native_v2_contract::CodexProvider;
 use crate::native_v2_runner::{
     AgentResponse, AgentResponseState, DriverControl, DriverInvocation, LiveOutput,
     LiveOutputStream, NodeRunnerError, ProviderSchemaDialect, ResolvedEnvironment,
-    render_agent_prompt_for, resolve_agent_response_with_dialect,
+    render_agent_prompt, resolve_agent_response_with_dialect,
 };
 
 use command::{
@@ -53,6 +53,7 @@ pub struct NativeV2CodexConfig {
     pub local_user: Option<NativeV2CodexUser>,
     /// Invoking-shell snapshot available only to the built-in local target.
     pub native_environment: LocalHarnessEnvironment,
+    pub base_environment: BTreeMap<String, String>,
     /// Explicit executable search path for Codex and commands launched by the agent.
     pub search_path: String,
     pub process_pool: HostedProcessPool,
@@ -204,6 +205,7 @@ impl NativeV2CodexAdapter {
                 "Codex declared environment conflicts with reserved runtime configuration",
             )
         })?;
+        values.extend(self.config.base_environment.clone());
         merge_local_environment(&mut values, environment, &self.local_environment);
         configure_provider_auth(
             &mut values,
@@ -241,11 +243,10 @@ impl NativeV2CodexAdapter {
             control: &control,
             execution: &execution,
         };
-        let prompt = render_agent_prompt_for(
+        let prompt = render_agent_prompt(
             invocation.agent_instructions()?,
             &invocation.node.input,
             &invocation.response,
-            self.runners.verifier_workspace(),
         )
         .map_err(|error| with_driver_detail(error, "Codex prompt could not be serialized"))?;
         let mut state = CodexRunState::new(

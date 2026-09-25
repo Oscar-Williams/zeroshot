@@ -14,6 +14,8 @@ isolated user, with a read-only root filesystem, fresh home and no network.
 The image's Rust installation is read-only. Explicit `RUSTUP_HOME` settings and existing
 `~/.rustup` installations take precedence; Cargo caches stay in the agent's private home unless
 it specifies `CARGO_HOME`. Other compiler versions and project dependencies remain caller-owned.
+The harness CLIs and their Node interpreter live under `/opt/zeroshot`; changing
+the project Node version or `PATH` does not change the harness interpreter.
 
 ## Run
 
@@ -63,6 +65,35 @@ docker run --detach --restart unless-stopped --name zeroshot-target \
 By default, the target performs no application-level authentication. Anyone who can reach the
 published port can use it. Run the container only on a private machine and private network, and do
 not expose the port to the public internet.
+
+## Environment scripts and Docker
+
+A runtime may declare `environment.setup`, `environment.startup`, and ordinary
+`environment.variables`. Setup runs as root before checkout or checkpoint restoration.
+Startup runs as the workspace user after checkout or restoration and before any agent.
+Both run again on resume, so startup must be idempotent with respect to workspace files.
+Workers and reviewers share this prepared workspace and its dependencies. Setup must not
+start root services or daemonize: its cleanup covers the shell process group, and trusted
+root scripts can escape that group. Debian package service autostart is disabled.
+
+Install shared project tools into `$ZEROSHOT_TOOLS`; its `bin` directory is already on
+agents' `PATH`. Install repository dependencies in the workspace. Shell `export` commands
+inside a hook affect that hook only; use declared variables for later agents. Keep
+long-lived project services in startup. Background processes in the target stop with the run
+and restart on resume. Detached Docker containers belong to the supplied daemon; a direct
+target operator or startup script must manage their names, reuse, and cleanup. Checkpoints
+restore workspace files and graph progress, not running processes or Docker data.
+
+The direct target is an operator-trusted server. Root setup changes the target container,
+including OS packages shared by other runs. Use a dedicated target container when projects
+need different system environments. Replacing the target resets its root filesystem.
+
+The image includes Docker CLI, Buildx and Compose. To use Docker, provide access to a
+daemon, for example by mounting a socket with permissions that allow the run's workspace
+user to connect. A mounted daemon controls the machine hosting it; use a disposable or
+dedicated daemon. Workspace bind mounts in sibling containers require the workspace to
+exist at the same absolute path on that daemon's host. Cloud supplies this arrangement
+inside its disposable run machine.
 
 ## Build
 

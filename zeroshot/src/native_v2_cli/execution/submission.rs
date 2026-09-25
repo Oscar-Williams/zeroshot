@@ -504,17 +504,20 @@ impl UniformRuntimePlan {
         match harness {
             UniformHarness::Copilot if self.provider == UniformProvider::Github => {
                 Ok(RuntimePlan::Copilot {
+                    environment: None,
                     provider: crate::native_v2_contract::CopilotProvider::Github,
                     size: self.size,
                     nodes,
                 })
             }
             UniformHarness::Codex => Ok(RuntimePlan::Codex {
+                environment: None,
                 provider: self.provider.codex().ok_or_else(incompatible)?,
                 size: self.size,
                 nodes,
             }),
             UniformHarness::Claude => Ok(RuntimePlan::Claude {
+                environment: None,
                 provider: self.provider.claude().ok_or_else(incompatible)?,
                 size: self.size,
                 nodes,

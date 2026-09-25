@@ -39,8 +39,16 @@ fn hosted_scopes_keep_loop_sessions_stable_and_executions_disjoint() {
         pool.identity(loop_scope).assert_value().uid(),
         repeated.uid()
     );
-    assert_ne!(repeated.uid(), first_execution.uid());
-    assert_ne!(first_execution.uid(), second_execution.uid());
+    assert_eq!(repeated.uid(), first_execution.uid());
+    assert_ne!(
+        repeated.runner().containment.membership(),
+        first_execution.runner().containment.membership()
+    );
+    assert_eq!(first_execution.uid(), second_execution.uid());
+    assert_ne!(
+        first_execution.runner().containment.membership(),
+        second_execution.runner().containment.membership()
+    );
     assert_eq!(
         loop_scope.private_home(Path::new("/runtime")),
         Path::new("/runtime/verifier-node-instance-7")
@@ -64,13 +72,13 @@ fn active_run_slots_are_disjoint_from_source_and_each_other() {
 
     assert_eq!(writer_identity(host), (10_002, 10_002));
     assert_eq!(writer_identity(first), (20_000, 10_002));
-    assert_eq!(writer_identity(second), (282_145, 10_002));
+    assert_eq!(writer_identity(second), (282_147, 10_002));
     assert_eq!(
         first
             .identity(HostedProcessScope::VerifierExecution(65_536))
             .assert_value()
             .uid(),
-        282_142
+        20_000
     );
     assert!(host.active_run_slot(u32::MAX, 65_536).is_err());
     let sentinel = HostedProcessPool::new(1, 1, u32::MAX - 4, 2).assert_value();
@@ -582,7 +590,7 @@ fn assert_pool_rejection_contracts() {
             .containment
             .membership()
             .assert_value(),
-        super::platform::WorkerMembership::Uid(20_001)
+        super::platform::WorkerMembership::SupplementaryGroup(20_003)
     );
     assert!(pool.active_run_slot(0, u64::MAX).is_err());
     assert!(pool.active_run_slot(u32::MAX, 1).is_err());

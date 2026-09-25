@@ -40,6 +40,9 @@ impl fmt::Display for NativeV2RunValueError {
 
 impl std::error::Error for NativeV2RunValueError {}
 
+mod environment;
+pub use environment::*;
+
 mod string_kind_sealed {
     pub trait Sealed {}
 }

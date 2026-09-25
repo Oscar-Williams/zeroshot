@@ -278,15 +278,15 @@ fn process_is_live(pid: u32) -> bool {
 
 #[cfg(target_os = "linux")]
 #[tokio::test]
-async fn root_hosted_verifier_configuration_cannot_modify_the_candidate() {
+async fn root_hosted_inspection_uses_shared_workspace_and_cleans_its_command_domain() {
     // SAFETY: geteuid only reads this process's identity.
     if unsafe { libc::geteuid() } != 0 {
-        eprintln!("root-only hosted configuration isolation gate skipped");
+        eprintln!("root-only hosted shared workspace gate skipped");
         return;
     }
     let mut fixture = Fixture::new(&format!(
         r#"set -eu
-! touch "$CANDIDATE/forbidden" 2>/dev/null
+touch "$CANDIDATE/shared-write"
 printf inspected > probe-write
 {SEQUENTIAL}"#
     ));
@@ -315,7 +315,7 @@ printf inspected > probe-write
             .assert_at(0)
             .is_some()
     );
-    assert!(!fixture.driver.workspace.join("probe-write").exists());
-    assert!(!fixture.driver.workspace.join("forbidden").exists());
+    assert!(fixture.driver.workspace.join("probe-write").exists());
+    assert!(fixture.driver.workspace.join("shared-write").exists());
     fixture.assert_cleaned();
 }

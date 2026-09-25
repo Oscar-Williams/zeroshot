@@ -49,6 +49,7 @@ pub(crate) struct DynamicConnectionPlan {
 #[derive(Clone)]
 pub struct RunEnvironment {
     values: Arc<RunConnectionValues>,
+    variables: Arc<BTreeMap<EnvironmentVariableName, String>>,
     dynamic_keys: Arc<BTreeSet<ConnectionKey>>,
     source_connection: Option<ConnectionKey>,
     resolver: Option<Arc<dyn RunConnectionResolver>>,
@@ -62,6 +63,7 @@ impl RunEnvironment {
         validate_bootstrap(runtime, &values, &BTreeSet::new())?;
         Ok(Self {
             values: Arc::new(values),
+            variables: runtime_variables(runtime),
             dynamic_keys: Arc::new(BTreeSet::new()),
             source_connection: None,
             resolver: None,
@@ -84,6 +86,7 @@ impl RunEnvironment {
         validate_bootstrap(runtime, &values, &dynamic.keys)?;
         Ok(Self {
             values: Arc::new(values),
+            variables: runtime_variables(runtime),
             dynamic_keys: Arc::new(dynamic.keys),
             source_connection: dynamic.source_connection,
             resolver: Some(dynamic.resolver),
@@ -110,7 +113,36 @@ impl RunEnvironment {
     /// Revalidates the static/dynamic partition against an immutable admitted runtime plan.
     pub fn for_runtime(&self, runtime: &RuntimePlan) -> Result<Self, RunEnvironmentError> {
         validate_bootstrap(runtime, self.values.as_ref(), self.dynamic_keys.as_ref())?;
-        Ok(self.clone())
+        Ok(Self {
+            variables: runtime_variables(runtime),
+            ..self.clone()
+        })
+    }
+
+    /// Resolve only the explicitly selected hook connection fields; never inherit node credentials.
+    pub(crate) async fn preparation_values(
+        &self,
+        runtime: &RuntimePlan,
+    ) -> Result<BTreeMap<String, String>, RunEnvironmentError> {
+        let Some(environment) = runtime.environment() else {
+            return Ok(BTreeMap::new());
+        };
+        let requirements = declared_requirements(&environment.connections);
+        let resolved = self.resolve_requirements(requirements).await?;
+        let mut values: BTreeMap<String, String> = environment
+            .variables
+            .iter()
+            .map(|(key, value)| (key.as_str().to_owned(), value.clone()))
+            .collect();
+        for connection in resolved.values() {
+            values.extend(
+                connection
+                    .as_map()
+                    .iter()
+                    .map(|(key, value)| (key.as_str().to_owned(), value.clone())),
+            );
+        }
+        Ok(values)
     }
 
     pub(crate) fn bootstrap_values(&self) -> RunConnectionValues {
@@ -158,11 +190,7 @@ impl RunEnvironment {
         &self,
         binding: &NodeRuntimeBinding,
     ) -> Result<ResolvedEnvironment, RunEnvironmentError> {
-        let requirements = binding
-            .declared_connections()
-            .iter()
-            .map(|(key, fields)| (key.clone(), fields.as_set().clone()))
-            .collect();
+        let requirements = declared_requirements(binding.declared_connections());
         let resolved = self.resolve_requirements(requirements).await?;
         let mut values = BTreeMap::new();
         for (key, fields) in binding.declared_connections().iter() {
@@ -179,7 +207,9 @@ impl RunEnvironment {
                 }
             }
         }
-        ResolvedEnvironment::exact(binding, values).map_err(|_| RunEnvironmentError::InvalidPlan)
+        let resolved = ResolvedEnvironment::exact(binding, values)
+            .map_err(|_| RunEnvironmentError::InvalidPlan)?;
+        Ok(resolved.with_variables(self.variables.as_ref()))
     }
 
     async fn resolve_requirements(
@@ -212,6 +242,24 @@ impl RunEnvironment {
         validate_size(&selected)?;
         Ok(selected)
     }
+}
+
+fn runtime_variables(runtime: &RuntimePlan) -> Arc<BTreeMap<EnvironmentVariableName, String>> {
+    Arc::new(
+        runtime
+            .environment()
+            .map(|value| value.variables.clone())
+            .unwrap_or_default(),
+    )
+}
+
+fn declared_requirements(
+    connections: &openengine_cluster_protocol::DeclaredConnections,
+) -> BTreeMap<ConnectionKey, BTreeSet<EnvironmentVariableName>> {
+    connections
+        .iter()
+        .map(|(key, fields)| (key.clone(), fields.as_set().clone()))
+        .collect()
 }
 
 #[derive(Clone)]

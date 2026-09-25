@@ -44,6 +44,8 @@ pub enum DeliveryPolicy {
 pub enum NativeV2AdmissionError {
     #[error("native-v2 requires graph profile openengine.graph.full/v1")]
     UnsupportedGraphProfile,
+    #[error("invalid runtime environment: {0}")]
+    InvalidEnvironment(String),
     #[error("initial input does not match GraphSpec.initialInput: {0}")]
     InitialInput(#[from] PayloadValueError),
     #[error("executable node {node} uses unsupported native-v2 attempt count {attempts}")]
@@ -117,8 +119,13 @@ impl NativeV2Admission {
         if graph.profile != GraphProfile::Full {
             return Err(NativeV2AdmissionError::UnsupportedGraphProfile);
         }
+        if let Some(environment) = runtime.environment() {
+            environment
+                .validate()
+                .map_err(|error| NativeV2AdmissionError::InvalidEnvironment(error.to_string()))?;
+        }
         let declarations = executable_declarations(&graph.root);
-        validate_executable_bindings(&declarations, runtime.nodes(), delivery_policy)?;
+        validate_executable_bindings(&declarations, runtime, delivery_policy)?;
         validate_delivery_concurrency(&graph.root)?;
         let registry = GraphBoundWorkerRegistry::from_declarations(graph, &declarations, runtime)?;
         ProductionGraphVerifier::new(registry)
@@ -237,9 +244,14 @@ fn prepare_submission(
         branch: _,
         submission_key: _,
     } = intent;
+    if let Some(environment) = runtime.environment() {
+        environment
+            .validate()
+            .map_err(|error| NativeV2AdmissionError::InvalidEnvironment(error.to_string()))?;
+    }
     validate_graph_input(&graph, &initial_input)?;
     let declarations = executable_declarations(&graph.root);
-    validate_executable_bindings(&declarations, runtime.nodes(), delivery_policy)?;
+    validate_executable_bindings(&declarations, &runtime, delivery_policy)?;
     validate_delivery_concurrency(&graph.root)?;
 
     Ok(PreparedSubmission {

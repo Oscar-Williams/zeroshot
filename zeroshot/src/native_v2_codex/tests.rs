@@ -164,6 +164,7 @@ fn adapter_with_configuration(
     let workspace = directory.child("workspace");
     fs::create_dir_all(&workspace).assert_value();
     Arc::new(NativeV2CodexAdapter::new_for_test(NativeV2CodexConfig {
+        base_environment: Default::default(),
         provider,
         executable,
         workspace,
@@ -219,6 +220,7 @@ async fn admitted(binding: NodeRuntimeBinding, provider: CodexProvider) -> Admit
         graph,
         initial_input: Value::Null,
         runtime: RuntimePlan::Codex {
+            environment: None,
             provider,
             size: RunSize::Medium,
             nodes: BTreeMap::from([(NodeName::new("work").assert_value(), binding)]),

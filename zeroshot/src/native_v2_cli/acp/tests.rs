@@ -204,16 +204,19 @@ fn runtime(harness: &str, scope: &str, connections: Value) -> RuntimePlan {
     let nodes = BTreeMap::from([(NodeName::new("worker").assert_value(), binding)]);
     match harness {
         "claude" => RuntimePlan::Claude {
+            environment: None,
             provider: ClaudeProvider::Anthropic,
             size: RunSize::Small,
             nodes,
         },
         "copilot" => RuntimePlan::Copilot {
+            environment: None,
             provider: CopilotProvider::Github,
             size: RunSize::Small,
             nodes,
         },
         _ => RuntimePlan::Codex {
+            environment: None,
             provider: CodexProvider::OpenAi,
             size: RunSize::Small,
             nodes,
