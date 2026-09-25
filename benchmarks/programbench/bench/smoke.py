@@ -282,15 +282,17 @@ def pipeline_checks(smoke: Smoke, summary: dict[str, Any]) -> None:
     attempts = {a["arm"]: a for a in summary["attempts"]}
     loop, single = attempts.get("loop"), attempts.get("single")
     results = smoke.results
-    smoke.check("pipeline_both_arms_complete", lambda: (bool(loop and single and loop["state"] == "complete" and single["state"] == "complete"), {k: v["state"] for k, v in attempts.items()}))
+    arms = set(smoke.exp.raw["arms"])
+    smoke.check("pipeline_arms_complete", lambda: (set(attempts) == arms and all(a["state"] == "complete" for a in attempts.values()), {k: v["state"] for k, v in attempts.items()}))
     schedule = smoke.exp.raw["eval"].get("rounds")
     expected = {"build-1", "final"} | ({"check-1"} if schedule is None else {f"build-{r}" for r in schedule if r <= (loop or {}).get("builds", 0)})
     smoke.check("pipeline_loop_snapshots_by_round", lambda: (bool(loop) and expected <= set(loop["rounds"]), loop and sorted(loop["rounds"])))
     smoke.check("pipeline_loop_ran_its_rounds", lambda: (bool(loop) and loop["builds"] - 1 <= loop["checks"] <= loop["builds"] and loop["builds"] >= min(3, smoke.exp.max_iterations), {"builds": loop and loop["builds"], "checks": loop and loop["checks"], "max": smoke.exp.max_iterations}))
     smoke.check("pipeline_snapshots_without_errors", lambda: (all(not any("error" in s for s in (a.get("snapshots") or {}).values()) for a in attempts.values()), {k: {n: s.get("seconds") for n, s in (a.get("snapshots") or {}).items()} for k, a in attempts.items()}))
-    smoke.check("pipeline_single_snapshot_equals_final", lambda: (
-        bool(single) and (single["rounds"].get("final") or {}).get("passed") is not None and (single["rounds"].get("build-1") or {}).get("passed") == single["rounds"]["final"]["passed"],
-        single and {k: v.get("passed") for k, v in single["rounds"].items()}))
+    if "single" in arms:
+        smoke.check("pipeline_single_snapshot_equals_final", lambda: (
+            bool(single) and (single["rounds"].get("final") or {}).get("passed") is not None and (single["rounds"].get("build-1") or {}).get("passed") == single["rounds"]["final"]["passed"],
+            single and {k: v.get("passed") for k, v in single["rounds"].items()}))
     smoke.check("pipeline_scored_all_tests", lambda: (
         all((a["rounds"].get("final") or {}).get("scored_tests") == summary["expected_scored_tests"] for a in attempts.values()) and bool(summary["expected_scored_tests"]),
         {a["label"]: {k: (a["rounds"].get("final") or {}).get(k) for k in ("score", "passed", "scored_tests", "error_code", "duplicate_result_entries", "rerun_plugin_pinned")} for a in attempts.values()}))

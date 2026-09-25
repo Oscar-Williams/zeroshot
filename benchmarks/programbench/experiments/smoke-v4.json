@@ -1,0 +1,81 @@
+{
+  "id": "smoke-v4",
+  "description": "Pipeline smoke test for v4: GPT-5.6 Sol at xhigh, v3's task adjustments, a 3-round loop and no single-worker arm, with short limits.",
+  "task": {
+    "instance_id": "ivanceras__svgbob.6d00ad9",
+    "image": "programbench/ivanceras_1776_svgbob.6d00ad9:task_cleanroom_v6@sha256:8656583769698b008c6ca1b02ca7da4207a4a3c7dc2d8105d82dc6ae0a2a6f67",
+    "reference_path": "/reference/executable",
+    "doc_fixes": [
+      {
+        "file": "README.md",
+        "old": "- `--font-family <font>` - Set font family for text (default: arial)",
+        "new": "- `--font-family <font>` - Set font family for text (default: Iosevka Fixed, monospace)"
+      },
+      {
+        "file": "README.md",
+        "old": "- `-s, --inline` - Parse an inline string",
+        "new": "- `-s` - Parse an inline string"
+      },
+      {
+        "file": "README.md",
+        "old": "- Server mode available for REST API usage",
+        "new": "- A separate server program (`svgbob_server`) for REST API usage"
+      },
+      {
+        "file": "README.md",
+        "old": "Svgbob can also run as a REST API server. Send ASCII art as a POST request and receive SVG output.",
+        "new": "The separate Svgbob Server (see `crates/svgbob_server/README.md`) runs svgbob as a REST API server. Send ASCII art as a POST request and receive SVG output."
+      }
+    ],
+    "adjustments_rationale": "Pilot v1 (luna-xhigh-svgbob-v1) showed builders overwriting or deleting the reference at ./executable (the build target) and later checkers enforcing README statements that contradict the reference. The reference moves to a root-owned directory outside the workspace (the task statement points there); README statements that contradict the reference's behavior are corrected: default font (renders Iosevka Fixed, monospace), --inline (only -s exists), server mode (a separate svgbob_server program). The reference's own --help text is unchanged. The --scale line is ambiguous rather than false and is left as is."
+  },
+  "model": {
+    "id": "gpt-5.6-sol",
+    "effort": "xhigh"
+  },
+  "arms": {
+    "loop": {
+      "repeats": 1,
+      "max_iterations": 3
+    }
+  },
+  "order": [
+    "loop"
+  ],
+  "limits": {
+    "attempt_seconds": 7200,
+    "build_timeout_ms": 2400000,
+    "check_timeout_ms": 900000
+  },
+  "resources": {
+    "concurrency": 1,
+    "cpus": 4,
+    "memory": "7g",
+    "pids_limit": 8192
+  },
+  "eval": {
+    "workers": 8,
+    "docker_cpus": 3,
+    "timeout_seconds": 14400,
+    "rounds": [
+      1,
+      2,
+      3
+    ]
+  },
+  "pricing": {
+    "model": "gpt-5.6-sol",
+    "usd_per_million_tokens": {
+      "input": 4.0,
+      "cached_input": 0.4,
+      "cache_write": 5.0,
+      "output": 20.0
+    },
+    "source": "https://developers.openai.com/api/docs/pricing",
+    "retrieved": "2026-09-25",
+    "note": "standard-tier promotional prices, available at least through 2026-11-21; Codex prompts stay under the 272K long-context threshold"
+  },
+  "decision_rule": {
+    "note": "not applicable to the smoke test"
+  }
+}

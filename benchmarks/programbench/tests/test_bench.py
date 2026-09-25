@@ -149,6 +149,13 @@ class ConfigTests(unittest.TestCase):
             with self.assertRaises(ValueError, msg=bad):
                 self._load({**v3.raw, "eval": {**v3.raw["eval"], "rounds": bad}})
 
+    def test_v4_is_five_sol_loops_without_a_single_arm(self):
+        v4 = config.load("experiments/sol-xhigh-svgbob-v4.json")
+        self.assertEqual((v4.model, v4.effort, v4.max_iterations), ("gpt-5.6-sol", "xhigh", 10))
+        self.assertEqual((v4.raw["order"], set(v4.raw["arms"])), (["loop"] * 5, {"loop"}))
+        self.assertEqual(v4.raw["eval"]["rounds"], list(range(1, 11)))
+        self.assertEqual(v4.raw["task"], config.load("experiments/luna-xhigh-svgbob-v3.json").raw["task"])
+
     def test_digest_covers_code_but_not_tests_or_results(self):
         names = {str(p.relative_to(config.ROOT)) for p in config.code_files()}
         self.assertTrue({"bench/attempt.py", "bench/evaluate.py", "requirements.lock", "agent/Dockerfile"} <= names)
@@ -500,6 +507,12 @@ class DecisionTests(unittest.TestCase):
         self.assertIn("| Run | R1 | R10 | Final |", lines)
         self.assertIn("| 01 | 200 | 225 | 230 |", lines)
         self.assertIn("| 02 | 190 | — | 199 |", lines)
+
+    def test_baseline_line_needs_a_single_arm(self):
+        loops = [{"arm": "loop", "score_first_build": 0.45, "score_final": 0.55}] * 5
+        self.assertEqual(report.baseline_lines(report._baseline_check(loops)), [])
+        both = [*loops, {"arm": "single", "score_first_build": 0.42, "score_final": 0.42}]
+        self.assertIn("Baseline check: single-arm finals mean 42.0% vs loop first builds mean 45.0%.", report.baseline_lines(report._baseline_check(both)))
 
     def test_disqualifying_audit_makes_a_run_ineligible(self):
         run = self._loop("01", 200, 260, commands={"rule_counts": {"process_environment_read": 1}, "rule_counts_by_round": {}})

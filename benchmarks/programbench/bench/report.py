@@ -284,6 +284,13 @@ def _decision(attempts: list[dict[str, Any]], expected_tests: int | None, exp: E
     return result
 
 
+def baseline_lines(b: dict[str, Any]) -> list[str]:
+    """Single-arm finals against the loop's first builds; an experiment without a single arm has none."""
+    if not b["single_final_scores"]:
+        return []
+    return ["", f"Baseline check: single-arm finals mean {_pct(b['single_final_mean'])} vs loop first builds mean {_pct(b['loop_first_build_mean'])}."]
+
+
 def _baseline_check(attempts: list[dict[str, Any]]) -> dict[str, Any]:
     """The loop's first build should look like a single-arm run (same prompt, same node)."""
     singles = [a["score_final"] for a in attempts if a["arm"] == "single" and a["score_final"] is not None]
@@ -362,8 +369,7 @@ def markdown(summary: dict[str, Any]) -> str:
             lines.append(f"Per-run gains: {d['gains_pp']} pp; median {d['median_gain_pp']} pp; mean {d['mean_gain_pp']} pp; one-sided sign test p = {d['sign_test_one_sided_p']}.")
         for label, reasons in d["ineligible"].items():
             lines.append(f"- {label} ineligible: {'; '.join(reasons)}")
-    b = summary["baseline_check"]
-    lines += ["", f"Baseline check: single-arm finals mean {_pct(b['single_final_mean'])} vs loop first builds mean {_pct(b['loop_first_build_mean'])}."]
+    lines += baseline_lines(summary["baseline_check"])
     lines += learning_curve(summary["attempts"])
     p, scored = summary.get("provenance") or {}, summary.get("scored_by") or {}
     lines += ["", f"Attempts ran at commit {p.get('vcs_ref', 'unknown')} (dirty={p.get('vcs_dirty', 'unknown')}); scored at {scored.get('vcs_ref', 'unknown')} (dirty={scored.get('vcs_dirty', 'unknown')})."]

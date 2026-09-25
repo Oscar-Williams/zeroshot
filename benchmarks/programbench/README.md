@@ -100,6 +100,14 @@ loops cost $6.73 to $9.42 each (about $0.15 per round) and the single runs $0.20
 numpy). The published lines are single mini-SWE-agent runs from the ProgramBench submissions
 repository, scored with the same ignore list.
 
+`sol-xhigh-svgbob-v4` asks whether the loop also helps a stronger model. It keeps v3's environment,
+prompts, graphs and limits, switches to GPT-5.6 Sol at xhigh, caps the loop at 10 rounds and scores
+every round. It drops the single-worker arm: a single worker is exactly the loop's first build (the
+builder's input is byte-identical in both arms), and the arms' first builds differed in both
+directions across v1 to v3 (v3: single runs 196.0 against loop first builds 215.8 tests, exact
+permutation p = 0.20). The H1 rule is unchanged (5 loop runs, final against build 1). At Sol's
+promotional prices, v3's token use over its first 10 rounds would cost about $170 for 5 runs.
+
 ## The graph and prompts
 
 Both arms share one byte-identical `build` node; round 1 of the loop is exactly the single arm.
