@@ -337,6 +337,7 @@ impl NativeV2CodexAdapter {
         let context = ProcessTurnContext {
             control: turn.control,
             session: turn.session,
+            resumed: execution.resume.is_some(),
         };
         exchange_turn(
             &mut turn_process.process,

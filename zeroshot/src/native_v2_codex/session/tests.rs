@@ -19,7 +19,7 @@ fn usage(
 
 #[tokio::test]
 async fn thread_ids_are_opaque_beyond_process_argv_requirements() {
-    let session = CodexSession::new(true);
+    let session = CodexSession::new();
     let thread_id = format!("thread-{}\nwith-tab\t", "x".repeat(512));
 
     assert_eq!(session.record_thread(Some(&thread_id), None).await, Ok(()));
@@ -46,12 +46,12 @@ async fn thread_ids_reject_only_missing_empty_nul_or_conflicting_values() {
         ),
     ] {
         assert_eq!(
-            CodexSession::new(true).record_thread(observed, None).await,
+            CodexSession::new().record_thread(observed, None).await,
             Err(expected)
         );
     }
 
-    let session = CodexSession::new(true);
+    let session = CodexSession::new();
     assert_eq!(session.record_thread(Some("one"), None).await, Ok(()));
     assert_eq!(
         session.record_thread(Some("two"), Some("one")).await,
@@ -65,25 +65,41 @@ async fn thread_ids_reject_only_missing_empty_nul_or_conflicting_values() {
 
 #[tokio::test]
 async fn cumulative_usage_is_normalized_before_commit() {
-    let session = CodexSession::new(true);
+    let session = CodexSession::new();
     let first = usage(10, 4, Some(3), Some(2));
-    assert_eq!(session.usage_delta(Some(first)).await, Some(first));
+    assert_eq!(session.usage_delta(Some(first), false).await, Some(first));
     session.commit_usage(Some(first)).await;
 
     let second = usage(16, 9, Some(5), Some(7));
     assert_eq!(
-        session.usage_delta(Some(second)).await,
+        session.usage_delta(Some(second), true).await,
         Some(usage(6, 5, Some(2), Some(5)))
     );
-    assert_eq!(session.usage_delta(None).await, None);
+    assert_eq!(session.usage_delta(None, true).await, None);
 }
 
 #[tokio::test]
 async fn a_decreased_counter_starts_a_new_usage_generation() {
-    let session = CodexSession::new(true);
+    let session = CodexSession::new();
     let previous = usage(10, 4, Some(3), Some(2));
     session.commit_usage(Some(previous)).await;
 
     let observed = usage(2, 1, Some(1), Some(1));
-    assert_eq!(session.usage_delta(Some(observed)).await, Some(observed));
+    assert_eq!(
+        session.usage_delta(Some(observed), true).await,
+        Some(observed)
+    );
+}
+
+#[tokio::test]
+async fn a_non_resumed_turn_starts_a_new_usage_generation() {
+    let session = CodexSession::new();
+    let previous = usage(10, 4, Some(3), Some(2));
+    session.commit_usage(Some(previous)).await;
+
+    let observed = usage(16, 9, Some(5), Some(7));
+    assert_eq!(
+        session.usage_delta(Some(observed), false).await,
+        Some(observed)
+    );
 }

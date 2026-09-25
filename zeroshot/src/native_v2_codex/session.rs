@@ -17,16 +17,14 @@ use super::output::CodexOutput;
 pub(super) struct CodexSession {
     pub(super) core: ProviderSessionCore,
     pub(super) thread_id: Mutex<Option<String>>,
-    normalize_usage: bool,
     usage: Mutex<Option<TokenUsageDelta>>,
 }
 
 impl CodexSession {
-    fn new(normalize_usage: bool) -> Self {
+    fn new() -> Self {
         Self {
             core: ProviderSessionCore::new(),
             thread_id: Mutex::new(None),
-            normalize_usage,
             usage: Mutex::new(None),
         }
     }
@@ -34,12 +32,13 @@ impl CodexSession {
     pub(super) async fn usage_delta(
         &self,
         observed: Option<TokenUsageDelta>,
+        resumed: bool,
     ) -> Option<TokenUsageDelta> {
         let observed = observed?;
-        if !self.normalize_usage {
+        let previous = *self.usage.lock().await;
+        if !resumed {
             return Some(observed);
         }
-        let previous = *self.usage.lock().await;
         Some(previous.map_or(observed, |previous| {
             if usage_reset(previous, observed) {
                 observed
@@ -61,9 +60,6 @@ impl CodexSession {
     }
 
     pub(super) async fn commit_usage(&self, observed: Option<TokenUsageDelta>) {
-        if !self.normalize_usage {
-            return;
-        }
         if let Some(observed) = observed {
             *self.usage.lock().await = Some(observed);
         }
@@ -177,14 +173,7 @@ impl SessionFactory for NativeV2CodexAdapter {
         if !matches!(invocation.binding, NodeRuntimeBinding::Agent { .. }) {
             return Err(NodeRunnerError::SessionOpen);
         }
-        let normalize_usage = matches!(
-            invocation.binding,
-            NodeRuntimeBinding::Agent {
-                session_scope: crate::execution::SessionScope::NodeInstance,
-                ..
-            }
-        );
-        Ok(Arc::new(CodexSession::new(normalize_usage)))
+        Ok(Arc::new(CodexSession::new()))
     }
 }
 

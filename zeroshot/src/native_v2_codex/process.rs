@@ -22,6 +22,7 @@ pub(super) enum ProcessOpen {
 pub(super) struct ProcessTurnContext<'a> {
     pub(super) control: &'a DriverControl,
     pub(super) session: &'a CodexSession,
+    pub(super) resumed: bool,
 }
 
 struct CollectedOutput {
@@ -103,7 +104,7 @@ pub(super) async fn exchange_turn(
             )
         }
     };
-    let normalized_usage = context.session.usage_delta(usage).await;
+    let normalized_usage = context.session.usage_delta(usage, context.resumed).await;
     let recorded = context.control.record_token_usage(normalized_usage).await;
     if matches!(
         &resolved,
