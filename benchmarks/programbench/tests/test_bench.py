@@ -698,6 +698,12 @@ class ClaudeHarnessTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             ConfigTests._load(None, raw)
 
+    def test_placeholder_key_is_not_reported_as_a_key(self):
+        self.assertEqual(audit.PLACEHOLDER_KEY, images.CLAUDE_PLACEHOLDER_KEY.encode())
+        shaped: dict = {}
+        audit._scan_blob("x", images.CLAUDE_PLACEHOLDER_KEY.encode(), [], [], shaped, [], 0)
+        self.assertEqual(shaped, {})
+
     def test_launcher_isolates_every_launch(self):
         launcher = images.claude_launcher({"PATH": "/usr/local/go/bin:/usr/local/cargo/bin:/usr/local/bin:/usr/bin:/bin", "HOME": "/root", "CARGO_HOME": "/usr/local/cargo", "ODD": "a b'c"})
         self.assertIn("export PATH=/usr/local/bin:/usr/bin:/bin:/usr/local/go/bin:/usr/local/cargo/bin\n", launcher)

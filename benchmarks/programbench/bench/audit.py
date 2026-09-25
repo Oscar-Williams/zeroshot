@@ -23,6 +23,8 @@ from .config import prompt
 from .util import secret_values
 
 KEY_SHAPE = re.compile(rb"(?<![A-Za-z0-9_-])sk-(?:proj-|svcacct-|admin-)?[A-Za-z0-9_-]{20,}")
+# What Claude Code in an attempt container sends instead of a key (images.CLAUDE_PLACEHOLDER_KEY).
+PLACEHOLDER_KEY = b"sk-ant-zsbench-gateway-placeholder"
 # Tool results that mean the harness itself failed, not the command the model asked for.
 HARNESS_TOOL_ERROR = re.compile(r"failed to spawn|code-mode host")
 ARCHIVE_SUFFIXES = (".tar.gz", ".tgz", ".tar")
@@ -108,7 +110,7 @@ def _git_objects(archive: Path) -> bytes:
 def _scan_blob(name: str, data: bytes, needles: list[bytes], hits: list[str], shaped: Counter, where: list[str], depth: int) -> None:
     if any(needle in data for needle in needles):
         hits.append(name)
-    found = len(KEY_SHAPE.findall(data))
+    found = len([m for m in KEY_SHAPE.findall(data) if m != PLACEHOLDER_KEY])
     if found:
         shaped[name] += found
         if len(where) < 20:

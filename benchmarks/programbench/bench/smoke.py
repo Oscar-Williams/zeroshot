@@ -28,7 +28,7 @@ from .attempt import (
     run_files,
 )
 from .config import UPSTREAM_REFERENCE, Experiment, pins
-from .evaluate import eval_image_tag, leaderboard_ignores, score_eval
+from .evaluate import SUBMISSION_OUTCOMES, eval_image_tag, leaderboard_ignores, score_eval
 from .images import CLAUDE_DISALLOWED_TOOLS, CLAUDE_PLACEHOLDER_KEY, CLAUDE_SWITCHES, Network, container_env, gateway_settings
 from .util import docker, download, log, run, without_secrets, write_json
 
@@ -386,9 +386,14 @@ def pipeline_checks(smoke: Smoke, summary: dict[str, Any]) -> None:
     smoke.check("pipeline_scored_all_tests", lambda: (
         all((a["rounds"].get("final") or {}).get("scored_tests") == summary["expected_scored_tests"] for a in attempts.values()) and bool(summary["expected_scored_tests"]),
         {a["label"]: {k: (a["rounds"].get("final") or {}).get(k) for k in ("score", "passed", "scored_tests", "error_code", "duplicate_result_entries", "rerun_plugin_pinned")} for a in attempts.values()}))
-    smoke.check("pipeline_rerun_plugin_pinned", lambda: (
-        all(a["rounds"] for a in attempts.values()) and all((v or {}).get("rerun_plugin_pinned") for a in attempts.values() for v in a["rounds"].values()),
-        "every eval installed the pinned pytest-rerunfailures"))
+    def rerun_plugin_pinned() -> tuple[bool, Any]:
+        """Every evaluation that ran tests installed the pinned plugin (a workspace that did not
+        compile never reaches the tests)."""
+        scored = [v or {} for a in attempts.values() for v in a["rounds"].values()]
+        ran = [v for v in scored if v.get("error_code") not in SUBMISSION_OUTCOMES]
+        return bool(ran) and all(v.get("rerun_plugin_pinned") for v in ran), f"{len(ran)} evaluation(s) ran tests, all with the pinned pytest-rerunfailures; {len(scored) - len(ran)} never compiled"
+
+    smoke.check("pipeline_rerun_plugin_pinned", rerun_plugin_pinned)
     smoke.check("pipeline_costed_from_transcripts", lambda: (
         all(a["cost_usd"].get("total", 0) > 0 and a["tokens"]["sessions"] for a in attempts.values()),
         {k: {"cost": a["cost_usd"], "sessions": [(s["node"], s["rounds"]) for s in a["tokens"]["sessions"]], "ledger_input": (a["tokens"]["ledger_total"] or {}).get("inputTokens"), "transcript_input": a["tokens"]["nodes"].get("total", {}).get("inputTokens")} for k, a in attempts.items()}))
@@ -401,14 +406,17 @@ def pipeline_checks(smoke: Smoke, summary: dict[str, Any]) -> None:
         detail: dict[str, Any] = {}
         for a in attempts.values():
             ledger_nodes, nodes = a["tokens"].get("ledger_nodes") or {}, a["tokens"]["nodes"]
+            # A force-stop interrupts one execution: the checks are still comparable when every
+            # check session ended with a verdict (the stop hit a build).
+            check_sessions = sum(1 for session in a["tokens"]["sessions"] if session["node"] == "check")
             ended_normally = {
-                "check": all(v in ("accepted", "rejected") for v in a["verdicts"]),
-                "build": all(b == "verified" for b in a["build_outcomes"]),
+                "check": all(v in ("accepted", "rejected") for v in a["verdicts"]) and check_sessions == len(a["verdicts"]),
+                "build": all(b == "verified" for b in a["build_outcomes"]) and not a.get("force_stopped"),
             }
             for node in ["check"] + (["build"] if a["arm"] == "single" else []):
                 if node not in ledger_nodes and node not in nodes:
                     continue
-                if not ended_normally[node] or a.get("force_stopped"):
+                if not ended_normally[node]:
                     detail[f"{a['label']}.{node}"] = "skipped: interrupted execution"
                     continue
                 ledger_usage, transcript_usage = ({k: (usage or {}).get(k) for k in FIELDS} for usage in (ledger_nodes.get(node), nodes.get(node)))

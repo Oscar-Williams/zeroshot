@@ -178,6 +178,9 @@ def _attempt_record(exp: Experiment, directory: Path, scores: dict[str, Any], ma
         "codex_config_unchanged": None if archived_config is None or not manifest.get("codex_config") else archived_config == manifest["codex_config"],
         "gateway": _gateway_record(directory) if exp.harness == "claude" else None,
     }
+    if record["gateway"]:
+        costs["transcripts_total"] = costs.get("total")
+        costs["total"] = record["gateway"]["cost_usd"]  # billed: includes requests no transcript records
     final, first = rounds.get("final") or {}, rounds.get("build-1") or {}
     if final.get("passed") is not None and first.get("passed") is not None:
         record["gain_tests"] = final["passed"] - first["passed"]
