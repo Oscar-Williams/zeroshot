@@ -128,7 +128,7 @@ the model was generating for 109 of its 120 minutes (about 90 tokens a second), 
 single Opus 5 xhigh run on this task made 168 calls and 370K output tokens (Sol xhigh: 37 and 58K).
 So v5 keeps all 10 rounds and drops the time cap (the attempt limit is a week; builds keep their
 3-hour and checks their 1-hour limit). Each attempt's model gateway refuses further requests once the
-attempt's API cost reaches $400, a safety net a run is not expected to reach; the smoke spent about
+attempt's API cost reaches $1,000, a safety net a run is not expected to reach; the smoke spent about
 $13.50 per hour.
 
 ## The graph and prompts

@@ -51,7 +51,7 @@
     "attempt_seconds": 604800,
     "build_timeout_ms": 10800000,
     "check_timeout_ms": 3600000,
-    "usd_cap_per_attempt": 400
+    "usd_cap_per_attempt": 1000
   },
   "resources": {
     "concurrency": 5,
@@ -99,6 +99,6 @@
     "covariates": "reported per run, not used for eligibility: whether the reference executable still existed after build 1 (builders may overwrite it), round count and verdicts, build-1 and total cost",
     "learning_curve": "pre-registered and descriptive: hidden tests passed after every build (1 to 10) and in the final workspace, per loop run and as the median across runs",
     "comparison": "descriptive, not a test: Opus 5's per-run gains and pass rates after builds 1, 2, 3, 5 and 10 next to sol-xhigh-svgbob-v4's and luna-xhigh-svgbob-v3's (different model and harness; same environment, prompts and graphs)",
-    "spending_cap": "the gateway refuses model requests once an attempt's API cost reaches $400; a run stopped by the cap counts like one stopped by the time limit (its final workspace is scored)"
+    "spending_cap": "the gateway refuses model requests once an attempt's API cost reaches $1,000; a run stopped by the cap counts like one stopped by the time limit (its final workspace is scored)"
   }
 }
