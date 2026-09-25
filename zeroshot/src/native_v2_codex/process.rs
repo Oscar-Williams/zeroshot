@@ -113,7 +113,7 @@ pub(super) async fn exchange_turn(
         return resolved;
     }
     recorded?;
-    context.session.commit_usage(usage).await;
+    context.session.commit_usage(usage, context.resumed).await;
     resolved
 }
 

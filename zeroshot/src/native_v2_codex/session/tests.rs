@@ -68,7 +68,7 @@ async fn cumulative_usage_is_normalized_before_commit() {
     let session = CodexSession::new();
     let first = usage(10, 4, Some(3), Some(2));
     assert_eq!(session.usage_delta(Some(first), false).await, Some(first));
-    session.commit_usage(Some(first)).await;
+    session.commit_usage(Some(first), false).await;
 
     let second = usage(16, 9, Some(5), Some(7));
     assert_eq!(
@@ -79,27 +79,42 @@ async fn cumulative_usage_is_normalized_before_commit() {
 }
 
 #[tokio::test]
-async fn a_decreased_counter_starts_a_new_usage_generation() {
+async fn resets_and_fresh_turns_start_new_usage_generations() {
     let session = CodexSession::new();
-    let previous = usage(10, 4, Some(3), Some(2));
-    session.commit_usage(Some(previous)).await;
+    session
+        .commit_usage(Some(usage(10, 4, Some(3), Some(2))), false)
+        .await;
 
-    let observed = usage(2, 1, Some(1), Some(1));
-    assert_eq!(
-        session.usage_delta(Some(observed), true).await,
-        Some(observed)
-    );
+    for (resumed, observed) in [
+        (true, usage(2, 1, Some(1), Some(1))),
+        (false, usage(16, 9, Some(5), Some(7))),
+    ] {
+        assert_eq!(
+            session.usage_delta(Some(observed), resumed).await,
+            Some(observed)
+        );
+    }
 }
 
 #[tokio::test]
-async fn a_non_resumed_turn_starts_a_new_usage_generation() {
-    let session = CodexSession::new();
-    let previous = usage(10, 4, Some(3), Some(2));
-    session.commit_usage(Some(previous)).await;
+async fn missing_usage_preserves_only_a_resumed_threads_baseline() {
+    for resumed in [false, true] {
+        let session = CodexSession::new();
+        session
+            .commit_usage(Some(usage(13, 5, Some(4), Some(2))), false)
+            .await;
+        assert_eq!(session.usage_delta(None, resumed).await, None);
+        session.commit_usage(None, resumed).await;
 
-    let observed = usage(16, 9, Some(5), Some(7));
-    assert_eq!(
-        session.usage_delta(Some(observed), false).await,
-        Some(observed)
-    );
+        let observed = usage(20, 8, Some(7), Some(6));
+        let expected = if resumed {
+            usage(7, 3, Some(3), Some(4))
+        } else {
+            observed
+        };
+        assert_eq!(
+            session.usage_delta(Some(observed), true).await,
+            Some(expected)
+        );
+    }
 }

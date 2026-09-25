@@ -59,9 +59,10 @@ impl CodexSession {
         }))
     }
 
-    pub(super) async fn commit_usage(&self, observed: Option<TokenUsageDelta>) {
-        if let Some(observed) = observed {
-            *self.usage.lock().await = Some(observed);
+    pub(super) async fn commit_usage(&self, observed: Option<TokenUsageDelta>, resumed: bool) {
+        // Missing usage preserves only the baseline of the thread being resumed.
+        if !resumed || observed.is_some() {
+            *self.usage.lock().await = observed;
         }
     }
 
