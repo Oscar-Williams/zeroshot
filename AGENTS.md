@@ -583,6 +583,9 @@ with `npm i -g @the-open-engine-company/zeroshot` or build `zeroshot` with Cargo
   hooks, CI gates, other skills, or checked-in state for personal analysis tooling.
 - New Rust APIs must respect the four-parameter Clippy ceiling; use request structs rather than
   raising or bypassing the limit.
+- Unix tests that create executable fixtures use
+  `openengine_cluster_testkit::fixture::write_executable`; its lock handoff covers writable
+  descriptors inherited by concurrent process spawns.
 - `.opcore.json` owns the full-source Opcore policy. `.github/workflows/opcore.yml` runs the Fast
   and native Rust providers on every PR and main commit. Its two exact PowerShell exclusions reflect
   unsupported parsing; the Windows native CI lane still runs those scripts.
