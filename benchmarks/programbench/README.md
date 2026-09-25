@@ -94,6 +94,12 @@ runs 5.8 to 14.1): most of it came by round 30, and three runs changed little ov
 30 rounds. The best run reached 60.0%. The single-worker finals scored 38.6, 41.7 and 44.3%. The
 loops cost $6.73 to $9.42 each (about $0.15 per round) and the single runs $0.20 to $0.35.
 
+![Hidden tests passed per round in luna-xhigh-svgbob-v3: mean of the 5 loop runs with a 95% bootstrap interval, the single-worker level and published results](figures/luna-xhigh-svgbob-v3-pass-rate.png)
+
+`scripts/plot_pass_rate.py figures/luna-xhigh-svgbob-v3.json` draws the figure (needs matplotlib and
+numpy). The published lines are single mini-SWE-agent runs from the ProgramBench submissions
+repository, scored with the same ignore list.
+
 ## The graph and prompts
 
 Both arms share one byte-identical `build` node; round 1 of the loop is exactly the single arm.

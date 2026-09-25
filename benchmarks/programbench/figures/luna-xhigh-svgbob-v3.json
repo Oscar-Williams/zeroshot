@@ -1,0 +1,39 @@
+{
+  "experiment": "luna-xhigh-svgbob-v3",
+  "title": "GPT-5.6 Luna (xhigh, Codex) on ProgramBench svgbob",
+  "scored_tests": 472,
+  "rounds": [1, 2, 3, 5, 10, 20, 30, 40, 50],
+  "loop_runs": {
+    "01-loop": [249, 249, 254, 254, 253, 260, 259, 257, 261],
+    "03-loop": [200, 208, 208, 216, 217, 226, 264, 264, 266],
+    "04-loop": [215, 221, 231, 239, 244, 253, 255, 263, 264],
+    "06-loop": [208, 210, 216, 221, 225, 233, 234, 235, 242],
+    "08-loop": [207, 215, 231, 236, 253, 257, 278, 284, 283]
+  },
+  "references_source": "ProgramBench/submissions@794fa30bbfd65059d5c67e192ceb6da659c9ef51, submissions/<entry>/_stats/score.json with ignored_tests.json applied",
+  "references": [
+    {
+      "model": "Claude Opus 5",
+      "effort": "xhigh",
+      "harness": "mini-SWE-agent",
+      "entry": "20260731_mini-v2.4.2_opus-5-xhigh",
+      "passed": 305,
+      "best": true
+    },
+    {
+      "model": "GPT-5.6 Sol",
+      "effort": "xhigh",
+      "harness": "mini-SWE-agent",
+      "entry": "20260802_mini-v2.4.2_gpt-5-6-sol-xhigh",
+      "passed": 253,
+      "label_side": "left"
+    },
+    {
+      "model": "GPT-5.6 Sol",
+      "effort": "default effort",
+      "harness": "mini-SWE-agent",
+      "entry": "20260730_mini-v2.2.8_gpt-5-6-sol",
+      "passed": 185
+    }
+  ]
+}
