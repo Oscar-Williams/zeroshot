@@ -123,10 +123,13 @@ total; a first build cost about $3.75).
 environment, prompts, graphs, limits and H1 rule, with Claude Opus 5 at xhigh running in Claude
 Code (the harness Zeroshot uses for Claude models) instead of GPT-5.6 Sol in Codex. Claude Code
 needs its own isolation (see Environment and isolation); the smoke test proves each part in a real
-run. Each attempt's model gateway refuses further requests once the attempt's API cost reaches
-$400, a safety net that a run is not expected to reach. The v4 token use at Opus 5 prices would cost
-about $220 for 5 runs, and the published single runs cost about 5 times as much for Opus 5 xhigh as
-for Sol xhigh on this task, so v5 may cost several hundred dollars.
+run. Opus 5 at xhigh is far slower per round: the smoke's builds did not finish within 40 minutes,
+the model was generating for 109 of its 120 minutes (about 90 tokens a second), and the published
+single Opus 5 xhigh run on this task made 168 calls and 370K output tokens (Sol xhigh: 37 and 58K).
+So v5 keeps all 10 rounds and drops the time cap (the attempt limit is a week; builds keep their
+3-hour and checks their 1-hour limit). Each attempt's model gateway refuses further requests once the
+attempt's API cost reaches $400, a safety net a run is not expected to reach; the smoke spent about
+$13.50 per hour.
 
 ## The graph and prompts
 
