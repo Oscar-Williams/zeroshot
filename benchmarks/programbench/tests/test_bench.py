@@ -492,8 +492,8 @@ class DecisionTests(unittest.TestCase):
     def test_files_left_in_codex_home_make_a_run_ineligible(self):
         meta = {"codex_home_surfaces": [], "snapshots": {"build-1": {"codex_home_surfaces": ["./AGENTS.md 0123456789abcdef"]}}, "codex_home_surfaces_end": []}
         self.assertEqual(report.codex_home_changes(meta), ["./AGENTS.md 0123456789abcdef"])
-        run = self._loop("01", 200, 260, codex_home_changes=report.codex_home_changes(meta))
-        self.assertTrue(any(r.startswith("a node left files for later Codex sessions") for r in run["ineligible_reasons"]))
+        run = self._loop("01", 200, 260, home_changes=report.home_changes(meta))
+        self.assertTrue(any(r.startswith("a node left files for later agent sessions") for r in run["ineligible_reasons"]))
 
     def test_building_the_reference_makes_a_run_ineligible(self):
         run = self._loop("01", 200, 260, reference_sha256="ab" * 32)
@@ -624,6 +624,142 @@ class EvalTests(unittest.TestCase):
         finally:
             pbeval._run_step = original
         self.assertEqual(seen, ["pip3 install -q --disable-pip-version-check pytest-rerunfailures==16.4"])
+
+
+def _load_gateway():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("zsbench_gateway", Path(__file__).resolve().parent.parent / "gateway" / "gateway.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _claude_record(kind: str, **fields) -> dict:
+    return {"type": kind, **fields}
+
+
+def _claude_prompt(text: str, timestamp: str) -> dict:
+    return _claude_record("user", timestamp=timestamp, message={"role": "user", "content": "Execute this graph node\nAuthored instructions:\n" + text})
+
+
+def _claude_response(message_id: str, timestamp: str, blocks: list, usage: dict) -> list[dict]:
+    """Claude Code writes one record per content block, each repeating the response's usage."""
+    return [_claude_record("assistant", timestamp=timestamp, requestId="req_" + message_id, message={"id": message_id, "model": "claude-opus-5", "content": [block], "usage": usage}) for block in blocks]
+
+
+def _claude_archive(path: Path, files: dict[str, list[dict]]) -> Path:
+    return _tar(path, {name: "\n".join(json.dumps(r) for r in records).encode() for name, records in files.items()})
+
+
+class GatewayTests(unittest.TestCase):
+    def test_only_custom_tools_pass(self):
+        gateway = _load_gateway()
+        self.assertEqual(gateway.blocked_request_features({"tools": [{"name": "Bash", "input_schema": {}}, {"type": "custom", "name": "Edit"}]}), [])
+        self.assertEqual(gateway.blocked_request_features({"tools": [{"type": "web_search_20250305", "name": "web_search"}]}), ["web_search_20250305"])
+        self.assertEqual(gateway.blocked_request_features({"tools": [], "mcp_servers": [{"url": "x"}]}), ["mcp_servers"])
+
+    def test_key_replaces_client_credentials_and_responses_stay_readable(self):
+        gateway = _load_gateway()
+        headers = gateway.forward_headers([("X-Api-Key", "placeholder"), ("Authorization", "Bearer x"), ("Accept-Encoding", "gzip"), ("Connection", "keep-alive"), ("anthropic-version", "2023-06-01")], "sk-real")
+        self.assertEqual(headers["x-api-key"], "sk-real")
+        self.assertEqual(headers["accept-encoding"], "identity")
+        self.assertEqual(headers["host"], "api.anthropic.com")
+        self.assertNotIn("Authorization", headers)
+        self.assertNotIn("Connection", headers)
+        self.assertNotIn("X-Api-Key", headers)
+        self.assertEqual(headers["anthropic-version"], "2023-06-01")
+
+    def test_streamed_usage_and_cost(self):
+        gateway = _load_gateway()
+        parser = gateway.SSEUsage()
+        start = {"type": "message_start", "message": {"model": "claude-opus-5", "usage": {"input_tokens": 10, "cache_creation_input_tokens": 1000, "cache_read_input_tokens": 5000, "output_tokens": 1, "cache_creation": {"ephemeral_5m_input_tokens": 600, "ephemeral_1h_input_tokens": 400}}}}
+        delta = {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 200}}
+        stream = f"event: message_start\ndata: {json.dumps(start)}\n\nevent: message_delta\ndata: {json.dumps(delta)}\n\n".encode()
+        for i in range(0, len(stream), 7):  # usage survives arbitrary chunk boundaries
+            parser.feed(stream[i:i + 7])
+        self.assertEqual((parser.usage["output_tokens"], parser.usage["cache_read_input_tokens"], parser.stop_reason, parser.model), (200, 5000, "end_turn", "claude-opus-5"))
+        prices = {"input": 5, "cached_input": 0.5, "cache_write": 6.25, "cache_write_1h": 10, "output": 25}
+        expected = (10 * 5 + 5000 * 0.5 + 600 * 6.25 + 400 * 10 + 200 * 25) / 1e6
+        self.assertAlmostEqual(gateway.cost_usd(parser.usage, prices), expected)
+        usage, model = gateway.usage_from_body(json.dumps({"model": "claude-opus-5", "usage": {"input_tokens": 3, "output_tokens": 4}}).encode())
+        self.assertEqual((usage, model), ({"input_tokens": 3, "output_tokens": 4}, "claude-opus-5"))
+
+
+class ClaudeHarnessTests(unittest.TestCase):
+    def test_v5_runs_claude_code_behind_the_gateway(self):
+        v5 = config.load("experiments/opus5-xhigh-svgbob-v5.json")
+        self.assertEqual((v5.harness, v5.provider, v5.secret_env, v5.model, v5.effort), ("claude", "anthropic", "ANTHROPIC_API_KEY", "claude-opus-5", "xhigh"))
+        self.assertEqual(v5.raw["task"], config.load("experiments/sol-xhigh-svgbob-v4.json").raw["task"])
+        plan = run_files(v5, "loop")["runtime.json"]
+        self.assertEqual((plan["harness"], plan["provider"]), ("claude", "anthropic"))
+        self.assertEqual(run_files(EXPERIMENT, "loop")["runtime.json"]["harness"], "codex")
+        raw = copy.deepcopy(EXPERIMENT.raw)
+        raw["limits"]["usd_cap_per_attempt"] = 100  # the cap needs the Claude gateway
+        with self.assertRaises(ValueError):
+            ConfigTests._load(None, raw)
+
+    def test_launcher_isolates_every_launch(self):
+        launcher = images.claude_launcher({"PATH": "/usr/local/go/bin:/usr/local/cargo/bin:/usr/local/bin:/usr/bin:/bin", "HOME": "/root", "CARGO_HOME": "/usr/local/cargo", "ODD": "a b'c"})
+        self.assertIn("export PATH=/usr/local/bin:/usr/bin:/bin:/usr/local/go/bin:/usr/local/cargo/bin\n", launcher)
+        self.assertIn("export TMPDIR=/tmp\n", launcher)
+        self.assertIn("export ODD='a b'\"'\"'c'\n", launcher)
+        self.assertNotIn("export HOME=", launcher)  # Zeroshot sets HOME itself
+        for switch in ("CLAUDE_CODE_DISABLE_CLAUDE_MDS=1", "CLAUDE_CODE_DISABLE_AUTO_MEMORY=1", "DISABLE_TELEMETRY=1"):
+            self.assertIn(f"export {switch}\n", launcher)
+        exec_line = launcher.strip().splitlines()[-1]
+        self.assertTrue(exec_line.startswith('exec /opt/claude-code/claude --safe-mode --setting-sources "" --disallowedTools "WebSearch,WebFetch,'), exec_line)
+        self.assertTrue(exec_line.endswith('"$@"'))
+
+    def test_claude_usage_counts_each_response_once_by_round(self):
+        usage = {"input_tokens": 2, "cache_creation_input_tokens": 100, "cache_read_input_tokens": 1000, "output_tokens": 50, "cache_creation": {"ephemeral_1h_input_tokens": 40}}
+        build = [
+            _claude_prompt(config.prompt("builder"), "2026-09-25T10:00:00Z"),
+            *_claude_response("m1", "2026-09-25T10:00:05Z", [{"type": "text", "text": "x"}, {"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": "ls"}}], usage),
+            _claude_prompt(config.prompt("builder"), "2026-09-25T10:10:00Z"),
+            *_claude_response("m2", "2026-09-25T10:10:05Z", [{"type": "text", "text": "y"}], usage),
+        ]
+        subagent = _claude_response("s1", "2026-09-25T10:11:00Z", [{"type": "text", "text": "z"}], usage)
+        check = [_claude_prompt(config.prompt("checker"), "2026-09-25T10:05:00Z"), *_claude_response("c1", "2026-09-25T10:05:05Z", [{"type": "text", "text": "ok"}], usage)]
+        with tempfile.TemporaryDirectory() as tmp:
+            archive = _claude_archive(Path(tmp, "trajectories.tar.gz"), {
+                ".claude/projects/-workspace/b0000000-0000-4000-8000-00000000000b.jsonl": build,
+                ".claude/projects/-workspace/b0000000-0000-4000-8000-00000000000b/subagents/agent-1.jsonl": subagent,
+                ".claude/projects/-workspace/c0000000-0000-4000-8000-00000000000c.jsonl": check,
+            })
+            sessions = accounting.claude_sessions(archive)
+        self.assertEqual([s["node"] for s in sessions], ["build", "check"])  # by first timestamp
+        one = {"inputTokens": 1102, "outputTokens": 50, "cacheReadInputTokens": 1000, "cacheCreationInputTokens": 100, accounting.ONE_HOUR: 40}
+        rounds = sessions[0]["rounds"]
+        self.assertEqual(rounds[0], one)  # m1 once, although it spans two records
+        self.assertEqual(rounds[1]["inputTokens"], 2 * 1102)  # m2 plus the subagent that ran during round 2
+        pricing = {"usd_per_million_tokens": {"input": 5, "cached_input": 0.5, "cache_write": 6.25, "cache_write_1h": 10, "output": 25}}
+        self.assertAlmostEqual(accounting.cost(one, pricing), (2 * 5 + 1000 * 0.5 + 60 * 6.25 + 40 * 10 + 50 * 25) / 1e6)
+
+    def test_ledger_input_includes_cache_for_claude(self):
+        events = [{"kind": "node_started", "reference": {"execution": 1, "node": "check"}}, {"kind": "token_usage_observed", "execution": 1, "usage": {"inputTokens": 2, "outputTokens": 5, "cacheReadInputTokens": 10, "cacheCreationInputTokens": 3}}]
+        self.assertEqual(accounting.usage_from_events(events, anthropic=True)["check"]["inputTokens"], 15)
+        self.assertEqual(accounting.usage_from_events(events)["check"]["inputTokens"], 2)
+
+    def test_claude_audit(self):
+        build = [
+            _claude_prompt(config.prompt("builder"), "2026-09-25T10:00:00Z"),
+            *_claude_response("m1", "2026-09-25T10:00:05Z", [{"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": "strings /reference/executable"}}], {"output_tokens": 1}),
+            _claude_record("user", timestamp="2026-09-25T10:00:06Z", message={"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1", "content": "strings: /reference/executable: Permission denied", "is_error": True}]}),
+            *_claude_response("m2", "2026-09-25T10:00:07Z", [{"type": "tool_use", "id": "t2", "name": "Write", "input": {"file_path": "/tmp/p.c", "content": "ptrace(PTRACE_PEEKTEXT, 0, 0, 0);"}}], {"output_tokens": 1}),
+            *_claude_response("m3", "2026-09-25T10:00:08Z", [{"type": "tool_use", "id": "t3", "name": "WebSearch", "input": {"query": "svgbob"}}], {"output_tokens": 1}),
+            _claude_record("attachment", timestamp="2026-09-25T10:00:01Z", attachment={"type": "instructions", "files": [{"path": "/workspace/CLAUDE.md", "content": "x"}]}),
+        ]
+        stray = _claude_response("n1", "2026-09-25T10:20:00Z", [{"type": "text", "text": "hi"}], {"output_tokens": 1})
+        with tempfile.TemporaryDirectory() as tmp:
+            archive = _claude_archive(Path(tmp, "t.tar.gz"), {".claude/projects/-workspace/a.jsonl": build, ".claude/projects/-tmp/nested.jsonl": stray})
+            result = audit.command_audit(archive)
+        counts = result["rule_counts"]
+        self.assertEqual((counts.get("reference_binary_analysis"), counts.get("reference_binary_analysis_denied"), counts.get("binary_instrumentation")), (1, 1, 1))
+        self.assertEqual(counts.get("unlaunched_model_session"), 1)  # a session Zeroshot did not start
+        self.assertIn("unlaunched_model_session", audit.DISQUALIFYING)
+        self.assertEqual((result["web_search_calls"], result["agents_md_loaded"], result["commands"]), (1, 1, 1))
+        self.assertEqual(result["rule_counts_by_round"]["build.round1"]["reference_binary_analysis"], 1)
+        self.assertFalse(audit.loaded_claude_md({"type": "attachment", "attachment": {"type": "edited_text_file", "filename": "CLAUDE.md"}}))
 
 
 if __name__ == "__main__":

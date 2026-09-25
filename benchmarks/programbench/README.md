@@ -119,6 +119,15 @@ total; a first build cost about $3.75).
 
 ![Hidden tests passed per round in sol-xhigh-svgbob-v4: mean of the 5 loop runs with a 95% bootstrap interval, the single-worker level and published results](figures/sol-xhigh-svgbob-v4-pass-rate.png)
 
+`opus5-xhigh-svgbob-v5` asks the same question of another model family and harness: v4's
+environment, prompts, graphs, limits and H1 rule, with Claude Opus 5 at xhigh running in Claude
+Code (the harness Zeroshot uses for Claude models) instead of GPT-5.6 Sol in Codex. Claude Code
+needs its own isolation (see Environment and isolation); the smoke test proves each part in a real
+run. Each attempt's model gateway refuses further requests once the attempt's API cost reaches
+$400, a safety net that a run is not expected to reach. The v4 token use at Opus 5 prices would cost
+about $220 for 5 runs, and the published single runs cost about 5 times as much for Opus 5 xhigh as
+for Sol xhigh on this task, so v5 may cost several hundred dollars.
+
 ## The graph and prompts
 
 Both arms share one byte-identical `build` node; round 1 of the loop is exactly the single arm.
@@ -206,6 +215,22 @@ re-derive it byte-for-byte.
   config mirrors the task image's ENV (`CARGO_HOME`, `RUSTUP_HOME`, …) into tool commands. It
   also gives them the image's plain `/tmp` as `TMPDIR`, instead of a directory inside Zeroshot's
   run state.
+- **Claude Code (v5):** Zeroshot starts `claude` for every node through a root-owned launcher that
+  always adds `--safe-mode` and `--setting-sources ""` (no settings files, `CLAUDE.md`, hooks,
+  skills, plugins, MCP servers, custom agents or commands from the workspace or from `~/.claude`),
+  disables auto memory, telemetry and auto-update, and removes the web tools (Anthropic runs web
+  search server-side, outside any egress control) and the tools that message other sessions or
+  schedule work. Without these, Claude Code runs a workspace's hooks and loads its `CLAUDE.md` into
+  every later node; the smoke test plants both, in the workspace and in `~/.claude`, and requires
+  that none takes effect. Claude Code gives tool commands its own environment, and without
+  bubblewrap (the container has no user namespaces) it cannot remove the key from it, so the key
+  never enters the attempt container: Claude Code sends a placeholder key to the attempt's model
+  gateway, a small Python server in the network's exit container that holds the real key, forwards
+  to `api.anthropic.com` only, refuses server-side tools, logs each request's model, tools and
+  usage, and enforces the spending cap. The attempt container has no proxy settings and no other
+  route out. Every model response in the transcripts must appear in the gateway log, and a Claude
+  session that Zeroshot did not start (a tool launching `claude`) disqualifies the run. Tool
+  commands get the task image's environment with root-owned directories first on `PATH`.
 - **Archives:** workspace archives are made as the `agent` user, like the upstream baseline, so the
   execute-only reference is never archived wherever the agent moves it. Agents do move it (the task
   asks them to build `./executable` at the same path), so every snapshot records where the

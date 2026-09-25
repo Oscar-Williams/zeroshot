@@ -4,8 +4,9 @@
 #   scripts/zsbench smoke
 #   scripts/zsbench run experiments/luna-xhigh-svgbob.json
 #
-# The API key comes from $OPENAI_API_KEY if set, otherwise from
-# ~/.config/zeroshot-bench/openai.env (see push-openai-key.sh). Either way it reaches the runner as
+# The OpenAI key comes from $OPENAI_API_KEY if set, otherwise from
+# ~/.config/zeroshot-bench/openai.env (see push-openai-key.sh); the Anthropic key (Claude Code
+# experiments) from ~/.config/zeroshot-bench/anthropic.env. Either way a key reaches the runner as
 # a read-only file mount, never as container config. Results land in ./results unless
 # ZSBENCH_RESULTS_DIR is set. ZSBENCH_DETACH=1 runs the runner as a detached container named
 # zsbench-runner (follow it with `docker logs -f zsbench-runner`; stop it with
@@ -55,6 +56,12 @@ if [[ -n ${OPENAI_API_KEY:-} ]]; then
 elif [[ -f $secret ]]; then
   echo "zsbench: using key file $secret" >&2
   args+=(-v "$secret:/run/secrets/openai.env:ro")
+fi
+# Claude Code experiments: the Anthropic key, for the model gateway (never the agent container).
+anthropic_secret=${ZSBENCH_ANTHROPIC_SECRET_FILE:-$HOME/.config/zeroshot-bench/anthropic.env}
+if [[ -f $anthropic_secret ]]; then
+  echo "zsbench: using key file $anthropic_secret" >&2
+  args+=(-v "$anthropic_secret:/run/secrets/anthropic.env:ro")
 fi
 
 if [[ ${ZSBENCH_DETACH:-0} == 1 ]]; then

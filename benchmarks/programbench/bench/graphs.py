@@ -145,9 +145,9 @@ def loop_graph(builder: str, checker: str, max_iterations: int, build_timeout_ms
     )
 
 
-def runtime_plan(arm: str, model: str, effort: str) -> dict[str, Any]:
+def runtime_plan(arm: str, model: str, effort: str, harness: str = "codex", provider: str = "openai") -> dict[str, Any]:
     """Exact runtime plan. The builder resumes its own session across rounds; each check is fresh."""
     nodes = {"build": {"kind": "agent", "model": model, "effort": effort, "sessionScope": "node_instance"}}
     if arm == "loop":
         nodes["check"] = {"kind": "agent", "model": model, "effort": effort, "sessionScope": "execution"}
-    return {"harness": "codex", "provider": "openai", "size": "medium", "nodes": nodes}
+    return {"harness": harness, "provider": provider, "size": "medium", "nodes": nodes}

@@ -13,6 +13,9 @@ from . import ROOT
 
 ARMS = ("loop", "single")
 EFFORTS = ("low", "medium", "high", "xhigh", "max")
+# Agent harness -> model provider it runs against, and the API key variable that provider needs.
+HARNESSES = {"codex": "openai", "claude": "anthropic"}
+SECRET_ENVS = {"openai": "OPENAI_API_KEY", "anthropic": "ANTHROPIC_API_KEY"}
 # Where ProgramBench task images put the reference executable. An experiment may move it out of the
 # workspace (task.reference_path), where the agent can run it but not overwrite, move or delete it.
 UPSTREAM_REFERENCE = "/workspace/executable"
@@ -75,6 +78,18 @@ class Experiment:
     @property
     def effort(self) -> str:
         return self.raw["model"]["effort"]
+
+    @property
+    def harness(self) -> str:
+        return self.raw["model"].get("harness", "codex")
+
+    @property
+    def provider(self) -> str:
+        return HARNESSES[self.harness]
+
+    @property
+    def secret_env(self) -> str:
+        return SECRET_ENVS[self.provider]
 
     @property
     def limits(self) -> dict[str, int]:
@@ -145,6 +160,11 @@ def _validate(raw: dict[str, Any]) -> None:
             raise ValueError(f"invalid doc fix: {fix}")
     if raw["model"]["effort"] not in EFFORTS:
         raise ValueError(f"effort must be one of {EFFORTS}")
+    harness = raw["model"].get("harness", "codex")
+    if harness not in HARNESSES or raw["model"].get("provider", HARNESSES.get(harness)) != HARNESSES.get(harness):
+        raise ValueError(f"model.harness/provider must be one of {HARNESSES}")
+    if "usd_cap_per_attempt" in raw["limits"] and (harness != "claude" or float(raw["limits"]["usd_cap_per_attempt"]) <= 0):
+        raise ValueError("limits.usd_cap_per_attempt must be positive and needs the Claude gateway")
     arms = raw["arms"]
     if set(arms) - set(ARMS):
         raise ValueError(f"unknown arms: {set(arms) - set(ARMS)}")
@@ -164,7 +184,7 @@ def _validate(raw: dict[str, Any]) -> None:
     if schedule is not None and (not schedule or schedule[0] != 1 or schedule != sorted(set(schedule)) or not all(isinstance(r, int) and r >= 1 for r in schedule)):
         raise ValueError("eval.rounds must be an ascending list of distinct round numbers starting at 1 (build 1 is the H1 baseline)")
     prices = raw["pricing"]["usd_per_million_tokens"]
-    for key in ("input", "cached_input", "cache_write", "output"):
+    for key in ("input", "cached_input", "cache_write", "output", *(("cache_write_1h",) if "cache_write_1h" in prices else ())):
         if float(prices[key]) < 0:
             raise ValueError("prices must be non-negative")
 

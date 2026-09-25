@@ -11,11 +11,19 @@
     "sha256": "135bfe1af2d8d5954c12f03bee2cf8b40dffb06f76bb0ec3bd6105de5357e009",
     "layout": "platform package: bin/codex, bin/codex-code-mode-host, codex-path/rg, codex-resources/"
   },
+  "claude_code": {
+    "version": "2.1.274",
+    "url": "https://registry.npmjs.org/@anthropic-ai/claude-code-linux-x64/-/claude-code-linux-x64-2.1.274.tgz",
+    "sha256": "b1ea96aedf3485705cafee8df53af74231888f4803745d7c0a6d8f31ae1cc6e0",
+    "member": "package/claude",
+    "layout": "native Linux x64 (glibc) build from the npm platform package; the stable channel on 2026-09-25"
+  },
   "leaderboard_ignores": {
     "url": "https://raw.githubusercontent.com/ProgramBench/submissions/794fa30bbfd65059d5c67e192ceb6da659c9ef51/ignored_tests.json",
     "sha256": "9d3e0cf0d6efd2b71ba92bd28db86b67e579d5692fcdf15396e9230e09dcb1d1"
   },
   "proxy_base_image": "alpine:3.22@sha256:5291449c3df73caf6ed85e649dec1b9e818b39a5d8c871e97afc13e9cd5e8fa8",
+  "gateway_base_image": "python:3.12-alpine@sha256:4c47124a8391cb7a9f571164147d154777cf012a4ece5f86097130d7a4478111",
   "programbench_tests": {
     "repo": "programbench/ProgramBench-Tests",
     "revision": "de0ddfb637590c7ecb54fa0b5301f6dc7dfbcee5"

@@ -21,18 +21,26 @@ REQUIRED_LOOP_RUNS = 5
 BUILD_1_OUTCOMES = ("verified", "timeout")
 
 
-def codex_home_changes(meta: dict[str, Any]) -> list[str]:
-    """Instruction and hook files in ~/.codex that differ from the attempt's start, at any
-    snapshot or at the end."""
-    if meta.get("codex_home_surfaces") is None:
+def _surfaces(record: dict[str, Any], key: str) -> Any:
+    """Home-surface probe results; attempts before the Claude harness recorded them as codex_*."""
+    return record.get(key, record.get(f"codex_{key}"))
+
+
+def home_changes(meta: dict[str, Any]) -> list[str]:
+    """Instruction and hook files in the agent's home (~/.codex or ~/.claude) that differ from the
+    attempt's start, at any snapshot or at the end."""
+    if _surfaces(meta, "home_surfaces") is None:
         return ["not checked at the start"]
-    start = set(meta["codex_home_surfaces"])
+    start = set(_surfaces(meta, "home_surfaces"))
     snapshots = {label: s for label, s in (meta.get("snapshots") or {}).items() if isinstance(s, dict)}
-    missing = [f"not checked after {label}" for label, s in snapshots.items() if s.get("codex_home_surfaces") is None]
-    if meta.get("codex_home_surfaces_end") is None:
+    missing = [f"not checked after {label}" for label, s in snapshots.items() if _surfaces(s, "home_surfaces") is None]
+    if _surfaces(meta, "home_surfaces_end") is None:
         missing.append("not checked at the end")
-    seen = [*(s.get("codex_home_surfaces") or [] for s in snapshots.values()), meta.get("codex_home_surfaces_end") or []]
+    seen = [*(_surfaces(s, "home_surfaces") or [] for s in snapshots.values()), _surfaces(meta, "home_surfaces_end") or []]
     return sorted({line for lines in seen for line in lines} - start) + missing
+
+
+codex_home_changes = home_changes
 
 
 def _pct(value: float | None) -> str:
@@ -77,9 +85,9 @@ def _eligibility(record: dict[str, Any], expected_tests: int | None) -> list[str
     if commands.get("web_search_calls"):
         reasons.append("audit: web search")
     if commands.get("agents_md_loaded"):
-        reasons.append("Codex loaded AGENTS.md instructions left by a node")
-    if record.get("codex_home_changes"):
-        reasons.append(f"a node left files for later Codex sessions: {', '.join(record['codex_home_changes'])[:200]}")
+        reasons.append("the agent loaded instructions (AGENTS.md or CLAUDE.md) left by a node")
+    if record.get("home_changes"):
+        reasons.append(f"a node left files for later agent sessions: {', '.join(record['home_changes'])[:200]}")
     if ((commands.get("rule_counts_by_round") or {}).get("build.round1") or {}).get("harness_internals"):
         reasons.append("audit: builder read harness internals in round 1")
     if record.get("reference_copies_in_final") or record.get("reference_copies_in_first_build"):
@@ -117,7 +125,7 @@ def build(exp: Experiment, results: Path) -> dict[str, Any]:
         "h1_decision": _decision(attempts, expected_tests, exp),
         "baseline_check": _baseline_check(attempts),
         "secrets": _secrets(results),
-        "egress": audit.proxy_audit("\n".join((d / "proxy.log").read_text() for d in sorted((results / "attempts").glob("*")) if (d / "proxy.log").exists())),
+        "egress": _egress(exp, results),
         "provenance": manifest.get("provenance"),
         "scored_by": _scoring_code(),
     }
@@ -163,17 +171,46 @@ def _attempt_record(exp: Experiment, directory: Path, scores: dict[str, Any], ma
         "checker_edits": audit.checker_edits(directory, snapshot_order),
         "reference_sha256": meta.get("reference_sha256"),
         "harness_unchanged": meta.get("harness_unchanged"),
-        "codex_home_changes": codex_home_changes(meta),
+        "home_changes": home_changes(meta),
         "reference_available_after_build_1": bool(snapshots["build-1"]["reference_at"]) if "reference_at" in snapshots.get("build-1", {}) else None,
         "reference_copies_in_final": audit.reference_copies(directory / "submission.tar.gz", meta.get("reference_sha256")),
         "reference_copies_in_first_build": audit.reference_copies(directory / "snapshots" / "build-1.tar.gz", meta.get("reference_sha256")),
         "codex_config_unchanged": None if archived_config is None or not manifest.get("codex_config") else archived_config == manifest["codex_config"],
+        "gateway": _gateway_record(directory) if exp.harness == "claude" else None,
     }
     final, first = rounds.get("final") or {}, rounds.get("build-1") or {}
     if final.get("passed") is not None and first.get("passed") is not None:
         record["gain_tests"] = final["passed"] - first["passed"]
     record["ineligible_reasons"] = _eligibility(record, expected_tests) if record["arm"] == "loop" else []
     return record
+
+
+def _egress(exp: Experiment, results: Path) -> dict[str, Any]:
+    logs = "\n".join((d / "proxy.log").read_text() for d in sorted((results / "attempts").glob("*")) if (d / "proxy.log").exists())
+    if exp.harness != "claude":
+        return audit.proxy_audit(logs)
+    summary = audit.gateway_audit(logs)
+    summary.pop("request_ids")
+    return summary
+
+
+def _gateway_record(directory: Path) -> dict[str, Any] | None:
+    """What the attempt's model gateway saw, and whether every model response in the transcripts
+    went through it (a response the gateway never saw would mean another route to the API)."""
+    log = directory / "proxy.log"
+    if not log.exists():
+        return None
+    gateway = audit.gateway_audit(log.read_text())
+    seen = set(gateway.pop("request_ids"))
+    transcripts = {
+        str(r["requestId"])
+        for records in accounting.claude_transcripts(directory / "trajectories.tar.gz").values()
+        for r in records
+        if r.get("type") == "assistant" and r.get("requestId") and (r.get("message") or {}).get("model") != "<synthetic>"
+    }
+    gateway["transcript_requests_not_seen"] = sorted(transcripts - seen)
+    gateway["requests_not_in_transcripts"] = len(seen - transcripts)
+    return gateway
 
 
 def _unreadable_record(meta: dict[str, Any], error: str) -> dict[str, Any]:
@@ -333,8 +370,8 @@ def markdown(summary: dict[str, Any]) -> str:
             flags.append("built executable is the reference")
         if a.get("harness_unchanged") is False:
             flags.append("harness modified")
-        if a.get("codex_home_changes") or a["commands"].get("agents_md_loaded"):
-            flags.append("instructions left in ~/.codex")
+        if a.get("home_changes") or a["commands"].get("agents_md_loaded"):
+            flags.append("instructions left for later sessions")
         if (a.get("build_outcomes") or [None])[0] == "timeout":
             flags.append("build 1 timed out")
         if a.get("reference_available_after_build_1") is False:
@@ -376,5 +413,9 @@ def markdown(summary: dict[str, Any]) -> str:
     s = summary["secrets"]
     lines += ["", f"Secret scan: literal key checked={s['checked_literal_key']}, hits={len(s['literal_key_hits'])}{' — DO NOT PUBLISH' if s['literal_key_hits'] else ''}."]
     if summary.get("egress"):
-        lines.append(f"Egress: connected {summary['egress']['established']}; refused {summary['egress']['refused']}.")
+        egress = summary["egress"]
+        if "established" in egress:
+            lines.append(f"Egress: connected {egress['established']}; refused {egress['refused']}.")
+        else:
+            lines.append(f"Model gateway (the only route out): {egress['requests']}; models {egress['models']}; refused {egress['refused'] or 'none'}; billed ${egress['cost_usd']}.")
     return "\n".join(lines) + "\n"

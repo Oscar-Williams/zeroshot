@@ -1,0 +1,13 @@
+#!/bin/sh
+# The benchmark's Claude Code launcher (root-owned; Zeroshot finds it as `claude` on its PATH).
+#
+# Every launch, by every node, gets the same isolation:
+# - no settings files (`--setting-sources ""`), and safe mode: no CLAUDE.md, hooks, skills, plugins,
+#   MCP servers, custom agents or commands, so one node cannot configure the next;
+# - no auto memory, telemetry, error reporting or auto-update;
+# - no web tools (they would bypass the attempt's egress controls) and no tools that talk to other
+#   sessions or schedule work beyond the node;
+# - tool commands get the task image's environment (root-owned directories first on PATH, so a file
+#   planted in the world-writable cargo directory cannot shadow a system command) and plain /tmp.
+@EXPORTS@
+exec /opt/claude-code/claude --safe-mode --setting-sources "" --disallowedTools "@DISALLOWED@" "$@"

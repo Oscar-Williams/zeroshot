@@ -4,13 +4,30 @@ from __future__ import annotations
 
 import hashlib
 import json
+import shlex
 import shutil
 import tarfile
+import time
 from pathlib import Path
 
 from . import ROOT
 from .config import Experiment, pins
 from .util import docker, download, log, run
+
+# Claude Code attempts: tools that would reach the web from Anthropic's side, talk to other sessions,
+# or schedule work beyond the node. Everything else is Claude Code's default toolset.
+CLAUDE_DISALLOWED_TOOLS = ("WebSearch", "WebFetch", "SendMessage", "ListAgents", "CronCreate", "CronDelete", "CronList", "ScheduleWakeup")
+# Claude Code switches set by the launcher for every launch.
+CLAUDE_SWITCHES = {
+    "CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1", "CLAUDE_CODE_DISABLE_CLAUDE_MDS": "1", "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+    "DISABLE_AUTOUPDATER": "1", "DISABLE_ERROR_REPORTING": "1", "DISABLE_TELEMETRY": "1",
+}
+# Zeroshot's own root-owned PATH; the launcher puts these directories first for Claude and its tools.
+ROOT_OWNED_PATH = ("/usr/local/bin", "/usr/bin", "/bin")
+GATEWAY_PORT = 8889
+GATEWAY_LOG = "/var/log/zsbench/gateway.jsonl"
+# What Claude Code in the attempt container sends as its API key; the gateway replaces it.
+CLAUDE_PLACEHOLDER_KEY = "sk-ant-zsbench-gateway-placeholder"
 
 # Variables that Zeroshot or Codex set per process; everything else from the image ENV is mirrored.
 _NOT_MIRRORED = {"HOME", "HOSTNAME"}
@@ -41,12 +58,41 @@ def image_env(reference: str) -> dict[str, str]:
 
 
 def codex_config(task_env: dict[str, str]) -> str:
+    lines = [f"{key} = {json.dumps(value)}" for key, value in sorted(tool_environment(task_env).items())]
+    template = (ROOT / "agent" / "codex-config.toml.in").read_text()
+    return template.replace("@SET@", "\n".join(lines))
+
+
+def tool_environment(task_env: dict[str, str]) -> dict[str, str]:
+    """The task image's environment for tool commands, with the upstream baseline's settings."""
     mirrored = {k: v for k, v in task_env.items() if k not in _NOT_MIRRORED}
     for key, value in _BASELINE_ENV.items():
         mirrored.setdefault(key, value)
-    lines = [f"{key} = {json.dumps(value)}" for key, value in sorted(mirrored.items())]
-    template = (ROOT / "agent" / "codex-config.toml.in").read_text()
-    return template.replace("@SET@", "\n".join(lines))
+    return mirrored
+
+
+def claude_launcher(task_env: dict[str, str]) -> str:
+    env = tool_environment(task_env)
+    rest = [d for d in env.get("PATH", "").split(":") if d and d not in ROOT_OWNED_PATH]
+    env["PATH"] = ":".join([*ROOT_OWNED_PATH, *dict.fromkeys(rest)])
+    env.update(CLAUDE_SWITCHES)
+    exports = "\n".join(f"export {key}={shlex.quote(value)}" for key, value in sorted(env.items()))
+    template = (ROOT / "agent" / "claude-launcher.sh.in").read_text()
+    return template.replace("@EXPORTS@", exports).replace("@DISALLOWED@", ",".join(CLAUDE_DISALLOWED_TOOLS))
+
+
+def build_gateway(cache: Path) -> str:
+    base = pins()["gateway_base_image"]
+    digest = hashlib.sha256()
+    for name in ("Dockerfile", "gateway.py"):
+        digest.update((ROOT / "gateway" / name).read_bytes())
+    digest.update(base.encode())
+    tag = f"zsbench-gateway:{digest.hexdigest()[:16]}"
+    if docker("image", "inspect", tag, check=False).strip() not in ("", "[]"):
+        return tag
+    log(f"building {tag}")
+    docker("build", "--quiet", "--build-arg", f"BASE_IMAGE={base}", "-t", tag, str(ROOT / "gateway"), timeout=1800)
+    return tag
 
 
 def build_proxy(cache: Path) -> str:
@@ -64,7 +110,9 @@ def build_proxy(cache: Path) -> str:
 
 
 def build_agent(exp: Experiment, cache: Path) -> tuple[str, dict[str, str]]:
-    """Return the agent image tag and the rendered Codex config (for the manifest)."""
+    """Return the agent image tag and the rendered harness config (for the manifest)."""
+    if exp.harness == "claude":
+        return _build_claude_agent(exp, cache)
     pin = pins()
     ensure_image(exp.task_image)
     config = codex_config(image_env(exp.task_image))
@@ -98,6 +146,60 @@ def build_agent(exp: Experiment, cache: Path) -> tuple[str, dict[str, str]]:
     return tag, info
 
 
+def _build_claude_agent(exp: Experiment, cache: Path) -> tuple[str, dict[str, str]]:
+    pin = pins()
+    ensure_image(exp.task_image)
+    launcher = claude_launcher(image_env(exp.task_image))
+    adjustments = json.dumps({"reference_path": exp.reference_path, "doc_fixes": exp.doc_fixes}, sort_keys=True, indent=2)
+    digest = hashlib.sha256()
+    for part in (exp.task_image, launcher, adjustments):
+        digest.update(part.encode())
+    for name in ("claude.Dockerfile", "prepare-task.py"):
+        digest.update((ROOT / "agent" / name).read_bytes())
+    for tool in ("zeroshot", "claude_code"):
+        digest.update(pin[tool]["sha256"].encode())
+    tag = f"zsbench-agent-claude:{digest.hexdigest()[:16]}"
+    info = {"tag": tag, "task_image": exp.task_image, "harness_config": launcher, "task_adjustments": json.loads(adjustments)}
+    if docker("image", "inspect", tag, check=False).strip() not in ("", "[]"):
+        return tag, info
+    context = cache / "agent-context" / tag.split(":", 1)[1]
+    shutil.rmtree(context, ignore_errors=True)
+    context.mkdir(parents=True)
+    zeroshot = download(pin["zeroshot"]["url"], pin["zeroshot"]["sha256"], cache / "downloads" / Path(pin["zeroshot"]["url"]).name)
+    _extract(zeroshot, pin["zeroshot"]["member"], context / "zeroshot")
+    claude = download(pin["claude_code"]["url"], pin["claude_code"]["sha256"], cache / "downloads" / Path(pin["claude_code"]["url"]).name)
+    _extract(claude, pin["claude_code"]["member"], context / "claude")
+    shutil.copy(ROOT / "agent" / "claude.Dockerfile", context / "Dockerfile")
+    shutil.copy(ROOT / "agent" / "prepare-task.py", context / "prepare-task.py")
+    (context / "claude-launcher.sh").write_text(launcher)
+    (context / "task-adjustments.json").write_text(adjustments)
+    log(f"building {tag} from {exp.task_image}")
+    docker("build", "--quiet", "--build-arg", f"TASK_IMAGE={exp.task_image}", "-t", tag, str(context), timeout=3600)
+    return tag, info
+
+
+def gateway_settings(exp: Experiment, image: str) -> dict[str, str] | None:
+    """Model gateway settings for Claude attempts (None for Codex, which uses the allowlist proxy)."""
+    if exp.harness != "claude":
+        return None
+    cap = exp.limits.get("usd_cap_per_attempt")
+    return {"image": image, "secret_env": exp.secret_env, "prices": json.dumps(exp.pricing["usd_per_million_tokens"], sort_keys=True), "cap": str(cap) if cap else ""}
+
+
+def container_env(exp: Experiment, network: "Network") -> list[str]:
+    """``docker run`` environment for an agent container. Codex reaches its API through the
+    allowlist proxy; Claude Code reaches the gateway directly with a placeholder key and has no
+    proxy settings at all, so tool commands have no route out."""
+    if exp.harness == "claude":
+        return ["-e", f"ANTHROPIC_BASE_URL={network.proxy_url}", "-e", f"ANTHROPIC_API_KEY={CLAUDE_PLACEHOLDER_KEY}"]
+    env = []
+    for name in ("HTTPS_PROXY", "HTTP_PROXY", "https_proxy", "http_proxy"):
+        env += ["-e", f"{name}={network.proxy_url}"]
+    for name in ("NO_PROXY", "no_proxy"):
+        env += ["-e", f"{name}=localhost,127.0.0.1,::1"]
+    return env
+
+
 class Network:
     """A private internal Docker network whose only exit is its own allowlist proxy.
 
@@ -105,23 +207,46 @@ class Network:
     belongs to exactly one attempt.
     """
 
-    def __init__(self, name: str, proxy_image: str, labels: tuple[str, ...] = ()):
+    def __init__(self, name: str, proxy_image: str, labels: tuple[str, ...] = (), gateway: dict[str, str] | None = None):
+        """``gateway`` (Claude attempts) replaces the allowlist proxy with the model gateway: the
+        image, the key variable to hand it, its price table (JSON) and optional spending cap."""
         self.name = name
         self.proxy = f"{name}-proxy"
         self.proxy_image = proxy_image
+        self.gateway = gateway
         self.labels = [arg for label in ("zsbench=1", *labels) for arg in ("--label", label)]
 
     @property
     def proxy_url(self) -> str:
-        return f"http://{self.proxy}:8888"
+        return f"http://{self.proxy}:{GATEWAY_PORT if self.gateway else 8888}"
 
     def up(self) -> None:
         self.down()
         docker("network", "create", "--internal", *self.labels, self.name)
+        if self.gateway:
+            self._gateway_up()
+            return
         docker("run", "-d", "--name", self.proxy, *self.labels, "--restart", "unless-stopped", "--network", self.name, self.proxy_image)
         docker("network", "connect", "bridge", self.proxy)
 
+    def _gateway_up(self) -> None:
+        """The gateway container idles; its server starts by `docker exec` with the key named in -e
+        (the value comes from this process's environment), so the key is in neither an argument
+        nor the container's configuration."""
+        gateway = self.gateway or {}
+        docker("run", "-d", "--name", self.proxy, *self.labels, "--network", self.name, gateway["image"])
+        docker("network", "connect", "bridge", self.proxy)
+        settings = ["-e", f"ZSBENCH_PRICES={gateway['prices']}", *(["-e", f"ZSBENCH_USD_CAP={gateway['cap']}"] if gateway.get("cap") else [])]
+        docker("exec", "-d", "-e", gateway["secret_env"], *settings, self.proxy, "python3", "/opt/zsbench/gateway.py")
+        for _ in range(60):
+            if '"event": "listening"' in docker("exec", self.proxy, "cat", GATEWAY_LOG, check=False):
+                return
+            time.sleep(1)
+        raise RuntimeError("the model gateway did not start")
+
     def proxy_log(self) -> str:
+        if self.gateway:
+            return docker("exec", self.proxy, "cat", GATEWAY_LOG, check=False)
         result = run(["docker", "logs", self.proxy], check=False)
         return result.stdout.decode(errors="replace") + result.stderr.decode(errors="replace")
 

@@ -16,9 +16,8 @@ from typing import Any
 
 from . import graphs, ledger
 from .config import AttemptSpec, Experiment, prompt, task_statement
-from .images import Network
+from .images import Network, container_env, gateway_settings
 from .util import (
-    SECRET_ENV,
     docker,
     docker_to_file,
     iter_json_objects,
@@ -47,11 +46,17 @@ TAR_OK = (0, 1)  # GNU tar: 1 = some files differ/changed while reading; the arc
 # environment, and of Codex's system configuration layers (/etc/codex, absent in the image). The
 # image's sudo rules allow root through package-manager hooks, so the harness is fingerprinted at
 # the start, after every node and at the end, and any change is reported.
-HARNESS_FINGERPRINT = (
-    "cd / && find usr/local/bin/zeroshot usr/local/bin/codex opt/codex etc/codex \\( -type f -o -type l \\) 2>/dev/null | LC_ALL=C sort | "
-    "while read -r f; do if [ -L \"$f\" ]; then echo \"link $f $(readlink \"$f\")\"; "
-    "else echo \"file $f $(stat -c %a:%u \"$f\") $(sha256sum < \"$f\" | cut -c1-64)\"; fi; done | sha256sum | cut -c1-64"
-)
+def _fingerprint(paths: str) -> str:
+    return (
+        f"cd / && find {paths} \\( -type f -o -type l \\) 2>/dev/null | LC_ALL=C sort | "
+        "while read -r f; do if [ -L \"$f\" ]; then echo \"link $f $(readlink \"$f\")\"; "
+        "else echo \"file $f $(stat -c %a:%u \"$f\") $(sha256sum < \"$f\" | cut -c1-64)\"; fi; done | sha256sum | cut -c1-64"
+    )
+
+
+HARNESS_FINGERPRINT = _fingerprint("usr/local/bin/zeroshot usr/local/bin/codex opt/codex etc/codex")
+# Claude Code: the launcher, the binary, and its system settings directory (managed settings; absent).
+CLAUDE_HARNESS_FINGERPRINT = _fingerprint("usr/local/bin/zeroshot usr/local/bin/claude opt/claude-code etc/claude-code")
 # Files in the Codex home (shared by every node) that a later Codex session would load or run:
 # the config, user AGENTS.md, skills (Codex manages skills/.system itself), prompts, rules, hooks,
 # plugins and profile configs. Recorded after every node, since a node could change them for the
@@ -62,6 +67,29 @@ CODEX_HOME_SURFACES = (
     "find skills prompts rules hooks plugins -path skills/.system -prune -o -type f -print; } 2>/dev/null | LC_ALL=C sort | "
     "while read -r f; do echo \"$f $(sha256sum < \"$f\" | cut -c1-16)\"; done"
 )
+# Claude Code's home, shared by every node: files a later session could load if the launcher's
+# isolation failed (instructions, settings, hooks, skills, agents, commands, plugins, output
+# styles, rules, workflows, auto memory). None exists at the start.
+CLAUDE_HOME_SURFACES = (
+    "cd /home/agent/.claude 2>/dev/null || exit 0; "
+    "{ find . -maxdepth 1 -type f \\( -name 'CLAUDE*.md' -o -name 'settings*.json' -o -name 'keybindings.json' \\); "
+    "find hooks skills agents commands plugins output-styles rules workflows -type f -print; "
+    "find projects -path '*/memory/*' -type f -print; } 2>/dev/null | LC_ALL=C sort | "
+    "while read -r f; do echo \"$f $(sha256sum < \"$f\" | cut -c1-16)\"; done"
+)
+CLAUDE_TRAJECTORY_TAR = [
+    "tar", "--ignore-failed-read", "--warning=no-file-changed", "--warning=no-file-removed",
+    "--exclude=*.bootstrap.json", "-C", "/home/agent", "-czf", "-", ".claude", ".claude.json", ".local/state/zeroshot",
+]
+
+
+def harness_probes(harness: str) -> tuple[list[str], str, str]:
+    """(trajectory archive command, harness fingerprint script, home surfaces script)."""
+    if harness == "claude":
+        return CLAUDE_TRAJECTORY_TAR, CLAUDE_HARNESS_FINGERPRINT, CLAUDE_HOME_SURFACES
+    return TRAJECTORY_TAR, HARNESS_FINGERPRINT, CODEX_HOME_SURFACES
+
+
 # A process that docker exec starts directly stays dumpable even when its executable is
 # execute-only, so its /proc/<pid>/environ is readable by the agent user; started by a shell's
 # exec it is not. The zeroshot submitter is the one process that gets the key from docker exec.
@@ -119,7 +147,7 @@ def run_files(exp: Experiment, arm: str) -> dict[str, Any]:
         graph = graphs.single_graph(builder, limits["build_timeout_ms"])
     return {
         "graph.json": graph,
-        "runtime.json": graphs.runtime_plan(arm, exp.model, exp.effort),
+        "runtime.json": graphs.runtime_plan(arm, exp.model, exp.effort, exp.harness, exp.provider),
         "input.json": {"task": task_statement(exp)},
     }
 
@@ -140,7 +168,8 @@ class Attempt:
         self.exp, self.spec, self.image, self.keep = exp, spec, image, keep
         self.dir = results / "attempts" / spec.label
         self.name = f"zsbench-{exp.id}-{spec.label}"
-        self.network = Network(f"{self.name}-net", proxy_image, (f"zsbench.experiment={exp.id}",))
+        self.network = Network(f"{self.name}-net", proxy_image, (f"zsbench.experiment={exp.id}",), gateway=gateway_settings(exp, proxy_image))
+        self.trajectory_tar, self.fingerprint_script, self.home_script = harness_probes(exp.harness)
         self.provenance = provenance
         self.meta: dict[str, Any] = {}
         self._stop_requested = threading.Event()
@@ -220,11 +249,7 @@ class Attempt:
     def _start_container(self) -> None:
         docker("rm", "-f", self.name, check=False)
         resources = self.exp.resources
-        proxy_env = []
-        for name in ("HTTPS_PROXY", "HTTP_PROXY", "https_proxy", "http_proxy"):
-            proxy_env += ["-e", f"{name}={self.network.proxy_url}"]
-        for name in ("NO_PROXY", "no_proxy"):
-            proxy_env += ["-e", f"{name}=localhost,127.0.0.1,::1"]
+        proxy_env = container_env(self.exp, self.network)
         docker(
             "run", "-d", "--name", self.name, "--hostname", "workspace", "--init",
             "--network", self.network.name, "--user", "agent", "--workdir", "/workspace",
@@ -248,11 +273,11 @@ class Attempt:
             raise RuntimeError("reference executable missing at start")
         self.meta["reference_size"], self.meta["reference_sha256"] = int(size_and_hash[0]), size_and_hash[1]
         self.meta["harness_fingerprint"] = self._harness_fingerprint()
-        self.meta["codex_home_surfaces"] = self._codex_home_surfaces()
+        self.meta["home_surfaces"] = self._home_surfaces()
 
     def _submit(self) -> str:
         receipt_text = docker(
-            "exec", "-u", "agent", "-w", "/workspace", "-e", SECRET_ENV, "-e", f"PATH={SUBMIT_PATH}", self.name,
+            "exec", "-u", "agent", "-w", "/workspace", *(("-e", self.exp.secret_env) if self.exp.harness == "codex" else ()), "-e", f"PATH={SUBMIT_PATH}", self.name,
             *EXEC_NONDUMPABLE, ZEROSHOT, "run", "--title", NEUTRAL_TITLE,
             "--graph", f"{RUN_DIR}/graph.json", "--input", f"{RUN_DIR}/input.json",
             "--runtime-config", f"{RUN_DIR}/runtime.json",
@@ -280,11 +305,11 @@ class Attempt:
         log(f"[{self.spec.label}] submitted run {run_id}")
         return run_id
 
-    def _codex_home_surfaces(self) -> list[str]:
-        return docker("exec", "-u", "root", *HARNESS_PATH, self.name, "sh", "-c", CODEX_HOME_SURFACES, timeout=300).splitlines()
+    def _home_surfaces(self) -> list[str]:
+        return docker("exec", "-u", "root", *HARNESS_PATH, self.name, "sh", "-c", self.home_script, timeout=300).splitlines()
 
     def _harness_fingerprint(self) -> str:
-        return docker("exec", "-u", "root", *HARNESS_PATH, self.name, "sh", "-c", HARNESS_FINGERPRINT, timeout=600).strip()
+        return docker("exec", "-u", "root", *HARNESS_PATH, self.name, "sh", "-c", self.fingerprint_script, timeout=600).strip()
 
     def _check_harness(self) -> None:
         """Compare the harness fingerprint at the end, and after every node, with the start."""
@@ -294,7 +319,7 @@ class Attempt:
                 self.meta["harness_unchanged"] = None  # a probe failed: integrity not checked
             else:
                 self.meta["harness_unchanged"] = all(f == self.meta["harness_fingerprint"] for f in after)
-            self.meta["codex_home_surfaces_end"] = _retry_once(self._codex_home_surfaces)
+            self.meta["home_surfaces_end"] = _retry_once(self._home_surfaces)
         except Exception as error:
             self.meta["harness_check_error"] = f"{type(error).__name__}: {error}"
 
@@ -394,7 +419,7 @@ class Attempt:
                 self.meta["snapshot_warnings"][label] = warnings
         except Exception as error:  # a snapshot must never cost the run
             record["error"] = f"{type(error).__name__}: {error}"
-        for key, probe in (("reference_at", self._reference_locations), ("codex_home_surfaces", self._codex_home_surfaces), ("harness_fingerprint", self._harness_fingerprint)):
+        for key, probe in (("reference_at", self._reference_locations), ("home_surfaces", self._home_surfaces), ("harness_fingerprint", self._harness_fingerprint)):
             try:
                 record[key] = _retry_once(probe)
             except Exception as error:  # recorded; the archive itself is still valid
@@ -426,7 +451,7 @@ class Attempt:
         self.meta["submission_tar_status"], warnings = archive(self.name, "agent", WORKSPACE_TAR, self.dir / "submission.tar.gz")
         if warnings.strip():
             self.meta["submission_warnings"] = warnings
-        archive(self.name, "root", TRAJECTORY_TAR, self.dir / "trajectories.tar.gz")
+        archive(self.name, "root", self.trajectory_tar, self.dir / "trajectories.tar.gz")
         git_log = docker("exec", "-u", "agent", *HARNESS_PATH, self.name, "git", "-C", "/workspace", "log", "--oneline", "-50", check=False)
         (self.dir / "workspace-git-log.txt").write_text(git_log)
 

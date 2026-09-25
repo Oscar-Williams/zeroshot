@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import Experiment, pins
-from .util import SECRET_ENV, download, log, read_json, sha256_file, write_json
+from .util import download, log, read_json, sha256_file, without_secrets, write_json
 
 # Eval error codes that are outcomes of the submission itself: its tree could not be committed,
 # its compile.sh failed or timed out, or it produced no usable ./executable. The leaderboard scores
@@ -205,7 +205,7 @@ def _programbench_eval(exp: Experiment, results: Path, run_dirs: list[Path], for
     ]
     if force:
         args.append("--force")
-    env = {k: v for k, v in os.environ.items() if k != SECRET_ENV}
+    env = without_secrets(dict(os.environ))
     env["PROGRAMBENCH_HF_REVISION"] = pins()["programbench_tests"]["revision"]
     with (results / "programbench-eval.log").open("ab") as out:
         try:

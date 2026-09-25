@@ -18,7 +18,7 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
-from .accounting import is_node_prompt
+from .accounting import claude_parent, claude_text, claude_transcripts, is_node_prompt
 from .config import prompt
 from .util import secret_values
 
@@ -49,7 +49,7 @@ COMMAND_RULES = {
     "network_fetch": re.compile(
         r"(?<!command -v )(?<!which )(?<!type )\b(curl|wget|nc|ncat|socat|ssh|scp|rsync|git\s+(clone|fetch|pull|ls-remote|submodule)|pip3?\s+(install|download)|cargo\s+(install|fetch|add|update|search)|go\s+(get|install|mod\s+download)|npm\s+(i|install|view)|apt(-get)?\s+(install|source|download|update))\b"
     ),
-    "model_api_calls": re.compile(r"api\.openai\.com|/v1/(responses|chat/completions|models|embeddings)", re.IGNORECASE),
+    "model_api_calls": re.compile(r"api\.openai\.com|api\.anthropic\.com|/v1/(responses|chat/completions|models|embeddings|messages)", re.IGNORECASE),
     "proxy_usage": re.compile(r"zsbench-\S*-proxy|\b(https?|all)_proxy\s*=|--proxy\b|\bproxies\s*=|\bcurl\b[^\n;&|]*\s-x\s", re.IGNORECASE),
     "sudo": re.compile(r"(^|[\s;&|(])sudo\b"),
     # /proc/<pid>/environ or mem, or BSD-style `ps e` (print environments); not `ps -e` (all
@@ -61,11 +61,17 @@ COMMAND_RULES = {
         re.MULTILINE,
     ),
     "cached_dependency_sources": re.compile(r"(\.cargo/registry/src|/usr/local/cargo/registry/src|mod-cache/|/pkg/mod/)"),
-    "harness_internals": re.compile(r"\bzeroshot\b|workspace-recovery|runs\.sqlite3|\.local/state/zeroshot|/opt/zeroshot-bench|/opt/codex\b|\.codex/(sessions|config\.toml|state_|logs_|memories)"),
+    "harness_internals": re.compile(r"\bzeroshot\b|workspace-recovery|runs\.sqlite3|\.local/state/zeroshot|/opt/zeroshot-bench|/opt/codex\b|\.codex/(sessions|config\.toml|state_|logs_|memories)|/opt/claude-code\b|\.claude/projects|\.claude\.json"),
+    # Claude attempts: the placeholder key and the gateway address are in every tool's environment
+    # (the real key is not); touching them is reported. Calling the gateway matches proxy_usage.
+    "credential_probe": re.compile(r"\$\{?ANTHROPIC_(?:API_KEY|BASE_URL|AUTH_TOKEN)\b|\$\{?(?:OPENAI|CODEX)_API_KEY\b"),
 }
 # Findings that disqualify a run from the H1 analysis (pre-registered): each is a channel that
 # could carry information the task withholds (the reference's internals, the web, the key).
-DISQUALIFYING = ("binary_instrumentation", "model_api_calls", "proxy_usage", "process_environment_read")
+DISQUALIFYING = ("binary_instrumentation", "model_api_calls", "proxy_usage", "process_environment_read", "unlaunched_model_session")
+# Claude Code tools that write files, and the input fields that hold the written text.
+_CLAUDE_WRITES = {"Write": ("content",), "Edit": ("new_string",), "MultiEdit": ("edits",), "NotebookEdit": ("new_source",)}
+_CLAUDE_WEB_TOOLS = frozenset({"WebSearch", "WebFetch"})
 PERMISSION_ERROR = re.compile(r"permission denied|cannot open|could not open|operation not permitted", re.IGNORECASE)
 # String arguments of code-mode tool calls that carry shell input.
 _JS_SHELL_ARG = re.compile(r"""\b(?:cmd|chars)\s*:\s*("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|`(?:[^`\\]|\\.)*`)""")
@@ -222,12 +228,52 @@ def loaded_agents_md(record: dict[str, Any]) -> bool:
     return False
 
 
+def loaded_claude_md(record: dict[str, Any]) -> bool:
+    """Whether a Claude Code record shows instructions loaded into the session (CLAUDE.md files or
+    memory, recorded as an ``instructions`` attachment). The launcher disables them, so any would
+    have been left by an earlier node."""
+    attachment = record.get("attachment") if record.get("type") == "attachment" else None
+    if not isinstance(attachment, dict):
+        return False
+    kind = str(attachment.get("type") or "")
+    return kind == "instructions" or "memory" in kind
+
+
+def _claude_session_commands(records: list[dict[str, Any]]) -> Iterator[tuple[int, str, str | None]]:
+    """(round, shell command, output or None) for every Bash call in one Claude Code transcript."""
+    turn = 0
+    calls: dict[str, tuple[int, str]] = {}
+    outputs: dict[str, str] = {}
+    for record in records:
+        if is_node_prompt(record):
+            turn += 1
+        content = (record.get("message") or {}).get("content")
+        for block in content if isinstance(content, list) else []:
+            if not isinstance(block, dict):
+                continue
+            if block.get("type") == "tool_use" and block.get("name") == "Bash":
+                calls.setdefault(str(block.get("id")), (turn, str((block.get("input") or {}).get("command") or "")))
+            elif block.get("type") == "tool_result":
+                result = block.get("content")
+                outputs[str(block.get("tool_use_id"))] = result if isinstance(result, str) else " ".join(str(c.get("text", "")) for c in result or [] if isinstance(c, dict))
+    for call_id, (turn_of, command) in calls.items():
+        yield turn_of, command, outputs.get(call_id)
+
+
+def _claude_blocks(records: list[dict[str, Any]]) -> Iterator[dict[str, Any]]:
+    for record in records:
+        content = (record.get("message") or {}).get("content")
+        for block in content if isinstance(content, list) else []:
+            if isinstance(block, dict):
+                yield block
+
+
 def command_audit(trajectories: Path) -> dict[str, Any]:
-    """Scan every Codex transcript. Rule hits are counted overall and per node and round, so the
+    """Scan every Codex or Claude Code transcript. Rule hits are counted overall and per node and round, so the
     builder's first round (the part both arms share) can be judged on its own. Rounds are numbered
     per node across threads in creation order: a builder thread started after a failed build
     continues the count, so ``build.round1`` is always the first build."""
-    findings: dict[str, list[str]] = {name: [] for name in (*COMMAND_RULES, "reference_binary_analysis_denied")}
+    findings: dict[str, list[str]] = {name: [] for name in (*COMMAND_RULES, "reference_binary_analysis_denied", "unlaunched_model_session")}
     counts: Counter = Counter()
     by_turn: dict[str, Counter] = defaultdict(Counter)
     web_calls = sessions = tool_outputs = commands = 0
@@ -295,6 +341,55 @@ def command_audit(trajectories: Path) -> dict[str, Any]:
                     hit(rule, where, script)
                     if rule == "reference_binary_analysis" and output is not None and PERMISSION_ERROR.search(output):
                         hit("reference_binary_analysis_denied", where, f"{script}  ->  {output[:200]}")
+    # Claude Code: sessions in creation order; a subagent joins its parent's node and round.
+    claude_files = claude_transcripts(trajectories)
+    started = {name: min((str(r.get("timestamp")) for r in records if r.get("timestamp")), default="") for name, records in claude_files.items()}
+    nodes: dict[str, str] = {}
+    prompt_times: dict[str, list[str]] = {}
+    offsets: dict[str, int] = {}
+    for name in sorted(claude_files, key=lambda n: (claude_parent(n) is not None, started[n], n)):
+        records = claude_files[name]
+        parent = claude_parent(name)
+        sessions += 1
+        if parent is None:
+            first = next((claude_text(r.get("message")) for r in records if is_node_prompt(r)), None)
+            node = _node_of(first) if first is not None else "unlaunched"
+            session = Path(name).stem
+            nodes[session] = node
+            prompt_times[session] = [str(r.get("timestamp") or "") for r in records if is_node_prompt(r)]
+            offsets[session] = turns_before[node]
+            turns_before[node] += len(prompt_times[session])
+            if node == "unlaunched":
+                hit("unlaunched_model_session", "unlaunched.round0", f"{name}: a Claude Code session without a node prompt")
+            offset, turn_at = offsets[session], None
+        else:
+            node = nodes.get(parent, "unlaunched")
+            times = prompt_times.get(parent, [])
+            offset = offsets.get(parent, 0)
+            turn_at = sum(1 for t in times if t and t <= started[name])
+        instructions_loaded += sum(1 for r in records if loaded_claude_md(r))
+        for block in _claude_blocks(records):
+            if block.get("type") == "tool_result":
+                tool_outputs += 1
+                result = block.get("content")
+                text = result if isinstance(result, str) else json.dumps(result)
+                if block.get("is_error") and HARNESS_TOOL_ERROR.search(text or ""):
+                    harness_errors.append((text or "")[:300])
+            elif block.get("type") == "server_tool_use" or (block.get("type") == "tool_use" and block.get("name") in _CLAUDE_WEB_TOOLS):
+                web_calls += 1
+                by_turn[f"{node}.round{offset + (turn_at or 1)}"]["web_search_calls"] += 1
+            elif block.get("type") == "tool_use" and block.get("name") in _CLAUDE_WRITES:
+                written = json.dumps({field: (block.get("input") or {}).get(field) for field in _CLAUDE_WRITES[block["name"]]})
+                if COMMAND_RULES["binary_instrumentation"].search(written):
+                    hit("binary_instrumentation", f"{node}.round{offset + (turn_at or 1)}", f"file change: {(block.get('input') or {}).get('file_path') or (block.get('input') or {}).get('notebook_path')}")
+        for turn_of, script, output in _claude_session_commands(records):
+            commands += 1
+            where = f"{node}.round{offset + (turn_at if turn_at is not None else turn_of)}"
+            for rule, pattern in COMMAND_RULES.items():
+                if pattern.search(script):
+                    hit(rule, where, script)
+                    if rule == "reference_binary_analysis" and output is not None and PERMISSION_ERROR.search(output):
+                        hit("reference_binary_analysis_denied", where, f"{script}  ->  {output[:200]}")
     return {
         "sessions": sessions,
         "commands": commands,
@@ -320,6 +415,33 @@ def proxy_audit(log_text: str) -> dict[str, Any]:
         elif match := re.search(r'(?:Proxying refused on filtered (?:domain|url)|refused)\s*"?([^"\s]+)"?', line, re.IGNORECASE):
             refused[match.group(1)] += 1
     return {"established": dict(established), "refused": dict(refused), "requests": dict(requested)}
+
+
+def gateway_audit(log_text: str) -> dict[str, Any]:
+    """Summarize model gateway logs (Claude attempts): requests by path and model, refusals, the
+    tools Claude Code offered the model, and the cost of the usage the API reported."""
+    requests, models, statuses, refused = Counter(), Counter(), Counter(), Counter()
+    tools: set[str] = set()
+    ids: list[str] = []
+    cost = 0.0
+    for line in log_text.splitlines():
+        try:
+            record = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(record, dict) or "path" not in record:
+            continue
+        requests[f"{record.get('method')} {record['path']}"] += 1
+        statuses[str(record.get("status"))] += 1
+        if record.get("model"):
+            models[str(record["model"])] += 1
+        if record.get("refused"):
+            refused[str(record["refused"])[:160]] += 1
+        tools.update(str(t) for t in record.get("tools") or [])
+        cost += float(record.get("cost_usd") or 0)
+        if record.get("request_id"):
+            ids.append(str(record["request_id"]))
+    return {"requests": dict(requests), "models": dict(models), "statuses": dict(statuses), "refused": dict(refused), "tools_offered": sorted(tools), "cost_usd": round(cost, 4), "request_ids": ids}
 
 
 def _file_hashes(path: Path) -> dict[str, str]:

@@ -18,7 +18,9 @@ from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
-SECRET_ENV = "OPENAI_API_KEY"
+# API keys the runner may hold (one per provider). They reach the runner as mounted files, never as
+# arguments, and are scanned for in every artifact.
+SECRET_ENVS = ("OPENAI_API_KEY", "ANTHROPIC_API_KEY")
 _log_lock = threading.Lock()
 _log_file: Path | None = None
 
@@ -102,28 +104,29 @@ def read_json(path: Path) -> Any:
     return json.loads(path.read_text())
 
 
-def require_secret() -> None:
-    value = os.environ.get(SECRET_ENV, "")
-    if not value.strip():
-        sys.exit(f"{SECRET_ENV} is not set. Export it before scripts/zsbench, or store it with scripts/push-openai-key.sh (see README).")
+def require_secret(name: str) -> None:
+    if not os.environ.get(name, "").strip():
+        sys.exit(f"{name} is not set. Export it before scripts/zsbench, or store it in ~/.config/zeroshot-bench (see README).")
 
 
 def load_secret_file(path: str | None) -> None:
-    """Load ``OPENAI_API_KEY=...`` from a mounted file into this process only."""
-    if not path or os.environ.get(SECRET_ENV):
+    """Load ``NAME=value`` lines for the known API keys from a mounted file into this process only;
+    a key already in the environment wins."""
+    if not path or not Path(path).exists():
         return
-    file = Path(path)
-    if not file.exists():
-        return
-    for line in file.read_text().splitlines():
+    for line in Path(path).read_text().splitlines():
         name, sep, value = line.partition("=")
-        if sep and name.strip() == SECRET_ENV:
-            os.environ[SECRET_ENV] = value.strip().strip('"').strip("'")
+        if sep and name.strip() in SECRET_ENVS and not os.environ.get(name.strip()):
+            os.environ[name.strip()] = value.strip().strip('"').strip("'")
 
 
 def secret_values() -> list[bytes]:
-    value = os.environ.get(SECRET_ENV, "").strip()
-    return [value.encode()] if len(value) >= 16 else []
+    values = (os.environ.get(name, "").strip() for name in SECRET_ENVS)
+    return [value.encode() for value in values if len(value) >= 16]
+
+
+def without_secrets(env: dict[str, str]) -> dict[str, str]:
+    return {k: v for k, v in env.items() if k not in SECRET_ENVS}
 
 
 def iter_json_objects(value: Any) -> Iterable[dict[str, Any]]:

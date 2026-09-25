@@ -29,7 +29,6 @@ from pathlib import Path
 from . import ROOT, config, evaluate, images, report, smoke
 from .attempt import Attempt, run_files
 from .util import (
-    SECRET_ENV,
     docker,
     load_secret_file,
     log,
@@ -41,7 +40,8 @@ from .util import (
 
 RESULTS = Path(os.environ.get("ZSBENCH_RESULTS", "/results"))
 CACHE = Path(os.environ.get("ZSBENCH_CACHE", "/cache"))
-SECRET_FILE = os.environ.get("ZSBENCH_SECRET_FILE", "/run/secrets/openai.env")
+# One key file per provider, mounted read-only by scripts/zsbench (whichever exist).
+SECRET_FILES = (os.environ.get("ZSBENCH_SECRET_FILE", "/run/secrets/openai.env"), "/run/secrets/anthropic.env")
 GIB = 1 << 30
 
 
@@ -74,8 +74,12 @@ def cmd_plan(exp: config.Experiment) -> None:
 
 
 def cmd_check_key(exp: config.Experiment) -> None:
-    require_secret()
-    request = urllib.request.Request(f"https://api.openai.com/v1/models/{exp.model}", headers={"Authorization": f"Bearer {os.environ[SECRET_ENV]}"})
+    require_secret(exp.secret_env)
+    key = os.environ[exp.secret_env]
+    if exp.provider == "anthropic":
+        request = urllib.request.Request(f"https://api.anthropic.com/v1/models/{exp.model}", headers={"x-api-key": key, "anthropic-version": "2023-06-01"})
+    else:
+        request = urllib.request.Request(f"https://api.openai.com/v1/models/{exp.model}", headers={"Authorization": f"Bearer {key}"})
     try:
         with urllib.request.urlopen(request, timeout=30) as response:
             print(f"OK: key accepted and {exp.model} is available (HTTP {response.status})")
@@ -115,7 +119,7 @@ def _prepare(exp: config.Experiment, results: Path, allow_mixed: bool) -> tuple[
         if previous.get("experiment_digest") != provenance["experiment_digest"] and not allow_mixed:
             sys.exit("results already hold attempts from a different experiment digest (code, prompts or config changed). Use a new results directory, or --allow-mixed.")
     _preflight(exp, results)
-    proxy_image = images.build_proxy(CACHE)
+    proxy_image = images.build_gateway(CACHE) if exp.harness == "claude" else images.build_proxy(CACHE)
     agent_image, info = images.build_agent(exp, CACHE)
     history = read_json(manifest_path).get("invocations", []) if manifest_path.exists() else []
     write_json(manifest_path, {
@@ -128,7 +132,8 @@ def _prepare(exp: config.Experiment, results: Path, allow_mixed: bool) -> tuple[
         "task_image": info["task_image"],
         "task_image_id": docker("image", "inspect", exp.task_image, "--format", "{{.Id}}").strip(),
         "eval_image": f"{exp.task_image.split(':')[0]}:{evaluate.eval_image_tag(exp)}",
-        "codex_config": info["codex_config"],
+        "codex_config": info.get("codex_config"),
+        "harness_config": info.get("harness_config"),
         "task_adjustments": info["task_adjustments"],
         "proxy_image": proxy_image,
         "prompts": {name: config.prompt(name) for name in ("builder", "checker", "task")},
@@ -173,7 +178,7 @@ def _run_attempts(exp: config.Experiment, results: Path, agent_image: str, proxy
 
 
 def cmd_run(exp: config.Experiment, keep: bool, skip_eval: bool, allow_mixed: bool) -> dict:
-    require_secret()
+    require_secret(exp.secret_env)
     _refuse_while_another_runner_runs("run")
     results = _results(exp)
     agent_image, proxy_image, provenance = _prepare(exp, results, allow_mixed)
@@ -223,7 +228,7 @@ def cmd_report(exp: config.Experiment) -> None:
 
 
 def cmd_smoke(exp: config.Experiment) -> None:
-    require_secret()
+    require_secret(exp.secret_env)
     results = _results(exp)
     if any((results / "attempts").glob("*/attempt.json")):
         sys.exit(f"{results} already holds a smoke test; move it aside to run the smoke test again")
@@ -286,7 +291,8 @@ def main() -> None:
     parser.add_argument("--allow-mixed", action="store_true", help="resume even if the experiment digest changed")
     args = parser.parse_args()
     signal.signal(signal.SIGTERM, _exit_on_signal)
-    load_secret_file(SECRET_FILE)
+    for path in SECRET_FILES:
+        load_secret_file(path)
     default = ROOT / "experiments" / ("smoke.json" if args.command == "smoke" else "luna-xhigh-svgbob.json")
     exp = config.load(args.experiment or default)
     try:
